@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oriens.local/schemas/event-v1.schema.json",
+  "title": "Oriens 游戏事件 v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "seq",
+    "run_id",
+    "type",
+    "game_frame",
+    "context",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "seq": { "type": "integer", "minimum": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "type": { "type": "string", "minLength": 1 },
+    "game_frame": { "type": "integer", "minimum": 0 },
+    "context": {
+      "type": "object",
+      "properties": {
+        "stage": { "type": "integer" },
+        "stage_type": { "type": "integer" },
+        "room_index": { "type": "integer" },
+        "room_type": { "type": "integer" },
+        "room_variant": { "type": "integer" },
+        "room_spawn_seed": { "type": "integer" },
+        "room_clear": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "payload": { "type": "object" }
+  }
+}
+

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oriens-sidecar"
+version = "0.1.0"
+description = "Oriens 阶段 0 游戏日志技术探针"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = []
+
+[project.scripts]
+oriens = "oriens.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "sidecar/src"}
+
+[tool.setuptools.packages.find]
+where = ["sidecar/src"]
+
