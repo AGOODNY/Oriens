@@ -7,7 +7,8 @@ import json
 from pathlib import Path
 import re
 import sqlite3
-from typing import Any
+import tempfile
+from typing import Any, Iterable, Iterator
 
 from .rag import normalize_alias
 
@@ -65,11 +66,24 @@ def build_corpus(source_path: Path, chunks_path: Path, manifest_path: Path) -> l
     return chunks
 
 
-def build_keyword_index(chunks: list[dict[str, Any]], index_path: Path) -> None:
+def build_keyword_index(
+    chunks: Iterable[dict[str, Any]],
+    index_path: Path,
+    *,
+    corpus_metadata: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """流式构建关键词索引；调用方不需要把完整分块集载入内存。"""
+
     index_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = index_path.with_suffix(index_path.suffix + ".tmp")
-    temporary.unlink(missing_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        prefix=index_path.name + ".", suffix=".tmp", dir=index_path.parent, delete=False
+    )
+    temporary = Path(handle.name)
+    handle.close()
     db = sqlite3.connect(temporary)
+    chunk_count = 0
+    content_version = "unknown"
+    started = __import__("time").perf_counter()
     try:
         db.executescript(
             """
@@ -86,6 +100,8 @@ def build_keyword_index(chunks: list[dict[str, Any]], index_path: Path) -> None:
                 checksum TEXT NOT NULL,
                 payload TEXT NOT NULL
             );
+            CREATE INDEX chunks_entity ON chunks(entity_type, entity_id, stale);
+            CREATE INDEX chunks_filters ON chunks(game_version, source_type, stale);
             CREATE TABLE aliases(
                 normalized TEXT NOT NULL,
                 alias TEXT NOT NULL,
@@ -95,6 +111,7 @@ def build_keyword_index(chunks: list[dict[str, Any]], index_path: Path) -> None:
                 PRIMARY KEY(normalized, chunk_id)
             );
             CREATE INDEX aliases_entity ON aliases(entity_type, entity_id);
+            CREATE INDEX aliases_normalized ON aliases(normalized);
             CREATE VIRTUAL TABLE chunks_fts USING fts5(
                 chunk_id UNINDEXED, name_zh, name_en, aliases, title, text,
                 tokenize='unicode61 remove_diacritics 2'
@@ -102,6 +119,8 @@ def build_keyword_index(chunks: list[dict[str, Any]], index_path: Path) -> None:
             """
         )
         for chunk in chunks:
+            chunk_count += 1
+            content_version = str(chunk.get("content_version") or content_version)
             payload = json.dumps(chunk, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             db.execute(
                 "INSERT INTO chunks VALUES(?,?,?,?,?,?,?,?,?)",
@@ -124,15 +143,41 @@ def build_keyword_index(chunks: list[dict[str, Any]], index_path: Path) -> None:
                 (chunk["chunk_id"], chunk["name_zh"], chunk["name_en"], " ".join(aliases), chunk["title"], chunk["text"]),
             )
         db.execute("INSERT INTO metadata VALUES('schema_version','1')")
-        db.execute("INSERT INTO metadata VALUES('chunk_count',?)", (str(len(chunks)),))
+        db.execute("INSERT INTO metadata VALUES('chunk_count',?)", (str(chunk_count),))
+        db.execute("INSERT INTO metadata VALUES('content_version',?)", (content_version,))
+        for key, value in sorted((corpus_metadata or {}).items()):
+            db.execute("INSERT OR REPLACE INTO metadata VALUES(?,?)", (key, str(value)))
+        db.execute("INSERT INTO metadata VALUES('vector_backend','none')")
         db.commit()
     finally:
         db.close()
     temporary.replace(index_path)
+    elapsed = (__import__("time").perf_counter() - started) * 1000
+    return {
+        "chunk_count": chunk_count,
+        "build_latency_ms": round(elapsed, 3),
+        "index_bytes": index_path.stat().st_size,
+    }
 
 
 def load_chunks(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return list(iter_chunks(path))
+
+
+def iter_chunks(path: Path) -> Iterator[dict[str, Any]]:
+    with path.open("r", encoding="utf-8") as source:
+        for line_number, line in enumerate(source, start=1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise CorpusValidationError(
+                    f"{path.name}:{line_number} 不是有效分块 JSON"
+                ) from exc
+            if not isinstance(value, dict):
+                raise CorpusValidationError(f"{path.name}:{line_number} 分块必须是对象")
+            yield value
 
 
 def _normalize_document(document: Any, defaults: dict[str, Any]) -> dict[str, Any]:

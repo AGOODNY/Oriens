@@ -23,9 +23,11 @@ from .rag_pipeline import (
     CorpusValidationError,
     build_corpus,
     build_keyword_index,
+    iter_chunks,
     load_chunks,
 )
-from .rag_worker import VectorWorkerClient
+from .rag_v2_pipeline import RagV2Paths, build_full_corpus
+from .rag_worker import VectorWorkerClient, convert_sqlite_vectors_to_faiss
 from .state import EventOrderError, StateStore
 from .tailer import LogTailer
 
@@ -161,6 +163,12 @@ def _make_advice_services(
 
 
 def _ensure_rag_index(config: OriensConfig) -> None:
+    if config.rag.pipeline_version == 2:
+        if not config.rag.index_path.is_file():
+            raise RagError(
+                "rag-v2 索引尚未构建；请先在命令行运行 oriens rag-build"
+            )
+        return
     needs_build = not config.rag.index_path.is_file()
     if config.rag.source_path.is_file() and config.rag.index_path.is_file():
         needs_build = config.rag.source_path.stat().st_mtime_ns > config.rag.index_path.stat().st_mtime_ns
@@ -177,7 +185,11 @@ def _make_vector_client(config: OriensConfig) -> VectorWorkerClient | None:
     return VectorWorkerClient(
         index_path=config.rag.index_path,
         model_path=config.rag.vector_model_path,
+        backend=config.rag.vector_backend,
+        vector_index_path=config.rag.vector_index_path,
         dimension=config.rag.vector_dimension,
+        batch_size=config.rag.vector_batch_size,
+        max_sequence_length=config.rag.vector_max_sequence_length,
         request_timeout_seconds=config.rag.vector_query_timeout_seconds,
     )
 
@@ -278,14 +290,43 @@ def run_ui(args: argparse.Namespace) -> int:
 def run_rag_build(args: argparse.Namespace) -> int:
     try:
         config = load_config(args.config)
-        chunks = build_corpus(
-            config.rag.source_path, config.rag.chunks_path, config.rag.manifest_path
-        )
-        build_keyword_index(chunks, config.rag.index_path)
+        import_report: dict[str, object] | None = None
+        if config.rag.pipeline_version == 2:
+            if not args.skip_import:
+                import_report = build_full_corpus(
+                    _rag_v2_paths(config),
+                    content_version=config.rag.content_version,
+                    game_version=config.rag.game_version,
+                    progress=lambda message: print(message, flush=True),
+                ).as_dict()
+            elif not config.rag.chunks_path.is_file():
+                raise RagError("rag-v2 分块不存在，不能跳过导入")
+            keyword_report = build_keyword_index(
+                iter_chunks(config.rag.chunks_path),
+                config.rag.index_path,
+                corpus_metadata={
+                    "content_version": config.rag.content_version,
+                    "corpus_id": "oriens-rag-v2-huiji-complete",
+                },
+            )
+            chunks: object = config.rag.chunks_path
+            chunk_count = int(keyword_report["chunk_count"])
+        else:
+            chunks = build_corpus(
+                config.rag.source_path, config.rag.chunks_path, config.rag.manifest_path
+            )
+            keyword_report = build_keyword_index(chunks, config.rag.index_path)
+            chunk_count = len(chunks)
         report: dict[str, object] = {
-            "documents": len(chunks),
-            "chunks": len(chunks),
+            "documents": (
+                import_report["document_count"]
+                if import_report is not None
+                else chunk_count
+            ),
+            "chunks": chunk_count,
+            "import": import_report,
             "keyword_index": str(config.rag.index_path),
+            "keyword_index_report": keyword_report,
             "vector_index": "未请求",
         }
         if args.with_vectors:
@@ -293,11 +334,20 @@ def run_rag_build(args: argparse.Namespace) -> int:
             if worker is None:
                 raise RagError("配置已关闭向量索引")
             try:
-                vector_report = worker.build(chunks)
+                if config.rag.pipeline_version == 2:
+                    vector_report = worker.build_path(
+                        config.rag.chunks_path,
+                        progress=lambda value: print(
+                            f"向量已编码 {value['processed']} 个分块，"
+                            f"耗时 {value['elapsed_ms'] / 1000:.1f} 秒",
+                            flush=True,
+                        ),
+                    )
+                else:
+                    vector_report = worker.build(chunks)
                 report["vector_index"] = {
-                    "count": vector_report["vector_count"],
+                    **vector_report,
                     "model_init_ms": worker.init_latency_ms,
-                    "build_latency_ms": vector_report["build_latency_ms"],
                 }
             finally:
                 worker.close()
@@ -306,6 +356,39 @@ def run_rag_build(args: argparse.Namespace) -> int:
         return 1
     _json_output(report)
     return 0
+
+
+def run_rag_import(args: argparse.Namespace) -> int:
+    try:
+        config = load_config(args.config)
+        if config.rag.pipeline_version != 2:
+            raise RagError("当前配置不是 rag-v2")
+        report = build_full_corpus(
+            _rag_v2_paths(config),
+            content_version=config.rag.content_version,
+            game_version=config.rag.game_version,
+            progress=lambda message: print(message, flush=True),
+        )
+    except (ConfigError, CorpusValidationError, RagError) as exc:
+        print(f"RAG 导入失败：{exc}", file=sys.stderr)
+        return 1
+    _json_output(report.as_dict())
+    return 0
+
+
+def _rag_v2_paths(config: OriensConfig) -> RagV2Paths:
+    if not config.rag.raw_paths:
+        raise RagError("rag-v2 配置缺少 raw_paths")
+    return RagV2Paths(
+        raw_paths=config.rag.raw_paths,
+        chunks_path=config.rag.chunks_path,
+        manifest_path=config.rag.manifest_path,
+        entities_path=config.rag.entities_path,
+        redirects_path=config.rag.redirects_path,
+        dependency_audit_path=config.rag.dependency_audit_path,
+        lua_facts_path=config.rag.lua_facts_path,
+        overrides_path=config.rag.overrides_path,
+    )
 
 
 def run_rag_query(args: argparse.Namespace) -> int:
@@ -418,6 +501,22 @@ def run_rag_benchmark(args: argparse.Namespace) -> int:
             worker.close()
 
 
+def run_rag_export_faiss(args: argparse.Namespace) -> int:
+    try:
+        config = load_config(args.config)
+        output = (args.output or config.root / "data/indexes/rag-v2.faiss").resolve()
+        report = convert_sqlite_vectors_to_faiss(
+            config.rag.index_path,
+            output,
+            dimension=config.rag.vector_dimension,
+        )
+        _json_output({"output": str(output), **report})
+        return 0
+    except (ConfigError, ImportError, OSError, RuntimeError) as exc:
+        print(f"FAISS 索引转换失败：{exc}", file=sys.stderr)
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Oriens 游戏日志伴侣")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -464,8 +563,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     rag_build = subparsers.add_parser("rag-build", help="清洗语料并构建本地检索索引")
     rag_build.add_argument("--config", type=Path)
-    rag_build.add_argument("--with-vectors", action="store_true", help="使用 BGE-M3 构建 sqlite-vec 索引")
+    rag_build.add_argument(
+        "--with-vectors", action="store_true", help="使用 BGE-M3 构建配置指定的向量索引"
+    )
+    rag_build.add_argument("--skip-import", action="store_true", help="rag-v2 已有分块时只重建索引")
     rag_build.set_defaults(handler=run_rag_build)
+
+    rag_import = subparsers.add_parser("rag-import", help="流式导入完整灰机快照为 rag-v2")
+    rag_import.add_argument("--config", type=Path)
+    rag_import.set_defaults(handler=run_rag_import)
 
     rag_query = subparsers.add_parser("rag-query", help="查询本地 RAG")
     rag_query.add_argument("query")
@@ -488,6 +594,13 @@ def build_parser() -> argparse.ArgumentParser:
     rag_benchmark.add_argument("--config", type=Path)
     rag_benchmark.add_argument("--worker-timeout", type=float, default=600.0)
     rag_benchmark.set_defaults(handler=run_rag_benchmark)
+
+    rag_export_faiss = subparsers.add_parser(
+        "rag-export-faiss", help="复用 sqlite-vec 中的向量构建 FAISS 对比索引"
+    )
+    rag_export_faiss.add_argument("--config", type=Path)
+    rag_export_faiss.add_argument("--output", type=Path)
+    rag_export_faiss.set_defaults(handler=run_rag_export_faiss)
     return parser
 
 

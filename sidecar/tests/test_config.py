@@ -43,6 +43,17 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(config.rag.source_path.is_file())
         self.assertTrue(config.rag.eval_path.is_file())
 
+    def test_rag_v2_and_backend_comparison_configs_are_explicit(self) -> None:
+        sqlite_config = load_config(Path("config/rag-v2.toml"))
+        faiss_config = load_config(Path("config/rag-v2-faiss.toml"))
+        self.assertEqual(sqlite_config.rag.pipeline_version, 2)
+        self.assertEqual(sqlite_config.rag.vector_backend, "sqlite-vec")
+        self.assertEqual(faiss_config.rag.vector_backend, "faiss")
+        self.assertEqual(sqlite_config.rag.content_version, faiss_config.rag.content_version)
+        self.assertEqual(sqlite_config.rag.raw_paths, faiss_config.rag.raw_paths)
+        self.assertEqual(sqlite_config.rag.vector_min_similarity, 0.58)
+        self.assertEqual(sqlite_config.rag.vector_max_sequence_length, 256)
+
 
 if __name__ == "__main__":
     unittest.main()

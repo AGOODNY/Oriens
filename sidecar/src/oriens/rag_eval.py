@@ -95,18 +95,23 @@ def evaluate(service: RagService, eval_path: Path) -> EvaluationReport:
     ordered = sorted(latencies)
     p95 = ordered[max(0, min(len(ordered) - 1, int(len(ordered) * 0.95) - 1))]
     thresholds = suite["thresholds"]
+    mode = "hybrid" if used_vector else "keyword"
     latency_threshold = (
         thresholds["hybrid_p95_latency_ms"]
         if used_vector
         else thresholds["keyword_p95_latency_ms"]
     )
+    recall_threshold = thresholds.get(
+        f"{mode}_recall_at_k", thresholds.get("recall_at_k", 1.0)
+    )
+    mrr_threshold = thresholds.get(f"{mode}_mrr", thresholds.get("mrr", 1.0))
     passed = (
-        recall_at_k >= thresholds["recall_at_k"]
-        and mrr >= thresholds["mrr"]
+        recall_at_k >= recall_threshold
+        and mrr >= mrr_threshold
         and no_answer_accuracy >= thresholds["no_answer_accuracy"]
         and p95 <= latency_threshold
     )
     return EvaluationReport(
-        suite["eval_id"], "hybrid" if used_vector else "keyword", len(details), recall_at_k, mrr, no_answer_accuracy,
+        suite["eval_id"], mode, len(details), recall_at_k, mrr, no_answer_accuracy,
         mean(latencies), p95, passed, tuple(details)
     )

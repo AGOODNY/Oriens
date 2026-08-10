@@ -155,6 +155,9 @@ class RagTests(unittest.TestCase):
         self.assertEqual(response.collectible_id, 118)
         self.assertTrue(retrieved_sources)
         self.assertTrue({source.id for source in response.sources} <= retrieved_sources)
+        self.assertEqual(response.retrieval_corpus_version, "1.0.0")
+        self.assertTrue(response.retrieval_degraded)
+        self.assertIsNotNone(response.retrieval_degradation_reason)
 
 
 if __name__ == "__main__":

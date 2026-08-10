@@ -1,0 +1,311 @@
+{
+  "schema_version": 1,
+  "entities": [
+    {
+      "page_title": "以撒",
+      "match_aliases": ["Isaac"],
+      "entity_type": "character",
+      "entity_id": "player:0",
+      "name_zh": "以撒",
+      "name_en": "Isaac",
+      "aliases": ["白板", "以撒本体"]
+    },
+    {
+      "page_title": "阿撒泻勒",
+      "match_aliases": ["Azazel"],
+      "entity_type": "character",
+      "entity_id": "player:7",
+      "name_zh": "阿撒泻勒",
+      "name_en": "Azazel",
+      "aliases": ["阿萨谢尔", "阿撒", "短硫磺"]
+    },
+    {
+      "page_title": "游魂",
+      "match_aliases": ["The Lost"],
+      "entity_type": "character",
+      "entity_id": "player:10",
+      "name_zh": "游魂",
+      "name_en": "The Lost",
+      "aliases": ["Lost", "迷失者"]
+    },
+    {
+      "page_title": "伯大尼",
+      "match_aliases": ["Bethany"],
+      "entity_type": "character",
+      "entity_id": "player:18",
+      "name_zh": "伯大尼",
+      "name_en": "Bethany",
+      "aliases": ["书妹", "魂火妹"]
+    },
+    {
+      "page_title": "雅各和以扫",
+      "match_aliases": ["Jacob and Esau"],
+      "entity_type": "character",
+      "entity_id": "player:19",
+      "name_zh": "雅各和以扫",
+      "name_en": "Jacob and Esau",
+      "aliases": ["双子", "雅各以扫", "红蓝人"]
+    },
+    {
+      "page_title": "房间",
+      "match_aliases": ["Rooms"],
+      "entity_type": "room",
+      "entity_id": "room:overview",
+      "name_zh": "房间机制",
+      "name_en": "Rooms",
+      "aliases": ["房间类型", "特殊房间"]
+    },
+    {
+      "page_title": "章节",
+      "match_aliases": ["Chapters"],
+      "entity_type": "route",
+      "entity_id": "route:overview",
+      "name_zh": "章节与路线",
+      "name_en": "Chapters and Routes",
+      "aliases": ["路线", "关卡路线", "楼层路线"]
+    },
+    {
+      "page_title": "家",
+      "match_aliases": ["Home"],
+      "entity_type": "route",
+      "entity_id": "route:beast",
+      "name_zh": "祸兽路线",
+      "name_en": "The Beast Route",
+      "aliases": ["祸兽", "祸兽线", "回家线", "上升线", "怎么去祸兽"]
+    },
+    {
+      "page_title": "尸宫",
+      "match_aliases": ["Corpse"],
+      "entity_type": "route",
+      "entity_id": "route:mother",
+      "name_zh": "母亲路线",
+      "name_en": "Mother Route",
+      "aliases": ["母亲", "母亲线", "尸宫线", "下水道矿洞陵墓"]
+    },
+    {
+      "page_title": "玩具箱",
+      "match_aliases": ["The Chest"],
+      "entity_type": "route",
+      "entity_id": "route:chest",
+      "name_zh": "宝箱层路线",
+      "name_en": "Chest Route",
+      "aliases": ["宝箱层", "天堂线", "教堂宝箱"]
+    },
+    {
+      "page_title": "暗室",
+      "match_aliases": ["Dark Room"],
+      "entity_type": "route",
+      "entity_id": "route:dark-room",
+      "name_zh": "暗室路线",
+      "name_en": "Dark Room Route",
+      "aliases": ["地狱线", "阴性底片路线"]
+    },
+    {
+      "page_title": "超级撒旦",
+      "match_aliases": ["Mega Satan"],
+      "entity_type": "route",
+      "entity_id": "route:mega-satan",
+      "name_zh": "超级撒旦路线",
+      "name_en": "Mega Satan Route",
+      "aliases": ["金门", "钥匙碎片路线"]
+    },
+    {
+      "page_title": "恶魔房",
+      "match_aliases": ["Devil Room"],
+      "entity_type": "room",
+      "entity_id": "room:14",
+      "name_zh": "恶魔房",
+      "name_en": "Devil Room",
+      "aliases": ["恶魔交易", "Devil Deal"]
+    },
+    {
+      "page_title": "天使房",
+      "match_aliases": ["Angel Room"],
+      "entity_type": "room",
+      "entity_id": "room:15",
+      "name_zh": "天使房",
+      "name_en": "Angel Room",
+      "aliases": ["白房", "Angel Deal"]
+    },
+    {
+      "page_title": "宝箱房",
+      "match_aliases": ["Treasure Room", "Item Room"],
+      "entity_type": "room",
+      "entity_id": "room:4",
+      "name_zh": "宝箱房",
+      "name_en": "Treasure Room",
+      "aliases": ["道具房", "金门房"]
+    },
+    {
+      "page_title": "商店",
+      "match_aliases": ["Shop"],
+      "entity_type": "room",
+      "entity_id": "room:2",
+      "name_zh": "商店",
+      "name_en": "Shop",
+      "aliases": ["商店房"]
+    },
+    {
+      "page_title": "献祭房",
+      "match_aliases": ["Sacrifice Room"],
+      "entity_type": "room",
+      "entity_id": "room:13",
+      "name_zh": "献祭房",
+      "name_en": "Sacrifice Room",
+      "aliases": ["刺房献祭", "献祭尖刺"]
+    },
+    {
+      "page_title": "C118",
+      "match_aliases": ["Brimstone", "硫磺火"],
+      "entity_type": "item",
+      "entity_id": "collectible:118",
+      "name_zh": "硫磺火",
+      "name_en": "Brimstone",
+      "aliases": ["brim", "硫磺", "红激光"]
+    },
+    {
+      "page_title": "C114",
+      "match_aliases": ["Mom's Knife", "妈妈的菜刀"],
+      "entity_type": "item",
+      "entity_id": "collectible:114",
+      "name_zh": "妈妈的菜刀",
+      "name_en": "Mom's Knife",
+      "aliases": ["妈刀", "菜刀"]
+    },
+    {
+      "page_title": "C330",
+      "match_aliases": ["Soy Milk", "豆浆"],
+      "entity_type": "item",
+      "entity_id": "collectible:330",
+      "name_zh": "豆浆",
+      "name_en": "Soy Milk",
+      "aliases": ["豆奶"]
+    },
+    {
+      "page_title": "C562",
+      "match_aliases": ["Rock Bottom", "谷底石"],
+      "entity_type": "item",
+      "entity_id": "collectible:562",
+      "name_zh": "谷底石",
+      "name_en": "Rock Bottom",
+      "aliases": ["石底", "属性锁"]
+    },
+    {
+      "page_title": "C1",
+      "match_aliases": ["The Sad Onion", "悲伤洋葱", "伤心洋葱"],
+      "entity_type": "item",
+      "entity_id": "collectible:1",
+      "name_zh": "伤心洋葱",
+      "name_en": "The Sad Onion",
+      "aliases": ["Sad Onion", "洋葱"]
+    },
+    {
+      "page_title": "C3",
+      "match_aliases": ["Spoon Bender", "弯勺魔术"],
+      "entity_type": "item",
+      "entity_id": "collectible:3",
+      "name_zh": "弯勺魔术",
+      "name_en": "Spoon Bender",
+      "aliases": ["弯勺", "追踪勺"]
+    },
+    {
+      "page_title": "C4",
+      "match_aliases": ["Cricket's Head", "柯里吉的头"],
+      "entity_type": "item",
+      "entity_id": "collectible:4",
+      "name_zh": "柯里吉的头",
+      "name_en": "Cricket's Head",
+      "aliases": ["板球头", "猫头"]
+    },
+    {
+      "page_title": "C12",
+      "match_aliases": ["Magic Mushroom", "魔法蘑菇"],
+      "entity_type": "item",
+      "entity_id": "collectible:12",
+      "name_zh": "魔法蘑菇",
+      "name_en": "Magic Mushroom",
+      "aliases": ["Magic Mush", "魔菇", "蘑菇"]
+    },
+    {
+      "page_title": "C105",
+      "match_aliases": ["The D6", "D6", "六面骰"],
+      "entity_type": "item",
+      "entity_id": "collectible:105",
+      "name_zh": "六面骰",
+      "name_en": "The D6",
+      "aliases": ["六面骰子", "重置骰"]
+    },
+    {
+      "page_title": "C149",
+      "match_aliases": ["Ipecac", "吐根酊", "吐根"],
+      "entity_type": "item",
+      "entity_id": "collectible:149",
+      "name_zh": "吐根酊",
+      "name_en": "Ipecac",
+      "aliases": ["吐根", "爆炸泪"]
+    },
+    {
+      "page_title": "C169",
+      "match_aliases": ["Polyphemus", "独眼巨人"],
+      "entity_type": "item",
+      "entity_id": "collectible:169",
+      "name_zh": "独眼巨人",
+      "name_en": "Polyphemus",
+      "aliases": ["大眼", "独眼"]
+    },
+    {
+      "page_title": "C182",
+      "match_aliases": ["Sacred Heart", "圣心"],
+      "entity_type": "item",
+      "entity_id": "collectible:182",
+      "name_zh": "圣心",
+      "name_en": "Sacred Heart",
+      "aliases": ["白心"]
+    },
+    {
+      "page_title": "C223",
+      "match_aliases": ["Pyromaniac", "纵火狂"],
+      "entity_type": "item",
+      "entity_id": "collectible:223",
+      "name_zh": "纵火狂",
+      "name_en": "Pyromaniac",
+      "aliases": ["火免", "爆炸免疫"]
+    },
+    {
+      "page_title": "C331",
+      "match_aliases": ["Godhead", "神性"],
+      "entity_type": "item",
+      "entity_id": "collectible:331",
+      "name_zh": "神性",
+      "name_en": "Godhead",
+      "aliases": ["神头"]
+    },
+    {
+      "page_title": "C350",
+      "match_aliases": ["Toxic Shock", "毒性休克"],
+      "entity_type": "item",
+      "entity_id": "collectible:350",
+      "name_zh": "毒性休克",
+      "name_en": "Toxic Shock",
+      "aliases": ["剧毒休克", "毒休克", "剧毒"]
+    },
+    {
+      "page_title": "C395",
+      "match_aliases": ["Tech X", "科技X"],
+      "entity_type": "item",
+      "entity_id": "collectible:395",
+      "name_zh": "科技 X",
+      "name_en": "Tech X",
+      "aliases": ["科技x", "科技十", "激光环"]
+    },
+    {
+      "page_title": "C678",
+      "match_aliases": ["C Section", "剖腹产"],
+      "entity_type": "item",
+      "entity_id": "collectible:678",
+      "name_zh": "剖腹产",
+      "name_en": "C Section",
+      "aliases": ["C-Section", "剖腹", "胎儿泪"]
+    }
+  ]
+}

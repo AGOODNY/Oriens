@@ -66,6 +66,18 @@ class RagSettings:
     vector_min_similarity: float
     vector_query_timeout_seconds: float
     retrieval_top_k: int
+    pipeline_version: int
+    content_version: str
+    raw_paths: tuple[Path, ...]
+    entities_path: Path
+    redirects_path: Path
+    dependency_audit_path: Path
+    lua_facts_path: Path
+    overrides_path: Path
+    vector_backend: str
+    vector_index_path: Path
+    vector_batch_size: int
+    vector_max_sequence_length: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +172,57 @@ def load_config(path: Path | None = None) -> OriensConfig:
             rag_raw, "vector_query_timeout_seconds"
         ),
         retrieval_top_k=_positive_int(rag_raw, "retrieval_top_k"),
+        pipeline_version=_optional_positive_int(rag_raw, "pipeline_version", 1),
+        content_version=_optional_string(rag_raw, "content_version", "rag-v1"),
+        raw_paths=tuple(
+            (root / item).resolve()
+            for item in _optional_string_list(rag_raw, "raw_paths")
+        ),
+        entities_path=(
+            root
+            / _optional_string(
+                rag_raw, "entities_path", "data/knowledge/rag-v1/entities.jsonl"
+            )
+        ).resolve(),
+        redirects_path=(
+            root
+            / _optional_string(
+                rag_raw, "redirects_path", "data/knowledge/rag-v1/redirects.jsonl"
+            )
+        ).resolve(),
+        dependency_audit_path=(
+            root
+            / _optional_string(
+                rag_raw,
+                "dependency_audit_path",
+                "data/knowledge/rag-v1/dependency-audit.json",
+            )
+        ).resolve(),
+        lua_facts_path=(
+            root
+            / _optional_string(
+                rag_raw, "lua_facts_path", "data/knowledge/rag-v1/lua-facts.jsonl"
+            )
+        ).resolve(),
+        overrides_path=(
+            root
+            / _optional_string(
+                rag_raw,
+                "overrides_path",
+                "data/dictionaries/rag-v2-overrides.json",
+            )
+        ).resolve(),
+        vector_backend=_optional_string(rag_raw, "vector_backend", "sqlite-vec"),
+        vector_index_path=(
+            root
+            / _optional_string(
+                rag_raw, "vector_index_path", _string(rag_raw, "index_path")
+            )
+        ).resolve(),
+        vector_batch_size=_optional_positive_int(rag_raw, "vector_batch_size", 32),
+        vector_max_sequence_length=_optional_positive_int(
+            rag_raw, "vector_max_sequence_length", 8192
+        ),
     )
     return OriensConfig(root, app, providers, roles, budget, rag)
 
@@ -241,3 +304,24 @@ def _boolean(value: dict[str, Any], name: str) -> bool:
     if type(result) is not bool:
         raise ConfigError(f"配置 {name} 必须是布尔值")
     return result
+
+
+def _optional_string(value: dict[str, Any], name: str, default: str) -> str:
+    if name not in value:
+        return default
+    return _string(value, name)
+
+
+def _optional_positive_int(value: dict[str, Any], name: str, default: int) -> int:
+    if name not in value:
+        return default
+    return _positive_int(value, name)
+
+
+def _optional_string_list(value: dict[str, Any], name: str) -> tuple[str, ...]:
+    result = value.get(name, [])
+    if not isinstance(result, (list, tuple)) or any(
+        not isinstance(item, str) or not item.strip() for item in result
+    ):
+        raise ConfigError(f"配置 {name} 必须是字符串数组")
+    return tuple(item.strip() for item in result)

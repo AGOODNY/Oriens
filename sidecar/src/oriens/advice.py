@@ -77,6 +77,8 @@ class AdviceResponse:
     rag_hits: tuple[RagHit, ...] = ()
     retrieval_latency_ms: float = 0.0
     retrieval_degraded: bool = False
+    retrieval_corpus_version: str = "unknown"
+    retrieval_degradation_reason: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -93,6 +95,8 @@ class AdviceResponse:
             "rag_hits": [hit.as_dict() for hit in self.rag_hits],
             "retrieval_latency_ms": self.retrieval_latency_ms,
             "retrieval_degraded": self.retrieval_degraded,
+            "retrieval_corpus_version": self.retrieval_corpus_version,
+            "retrieval_degradation_reason": self.retrieval_degradation_reason,
         }
 
 
@@ -222,6 +226,12 @@ class AdviceEngine:
             rag_hits=evidence.rag_result.hits if evidence.rag_result else (),
             retrieval_latency_ms=(evidence.rag_result.latency_ms if evidence.rag_result else 0.0),
             retrieval_degraded=(evidence.rag_result.degraded if evidence.rag_result else True),
+            retrieval_corpus_version=(
+                evidence.rag_result.corpus_version if evidence.rag_result else "unknown"
+            ),
+            retrieval_degradation_reason=(
+                evidence.rag_result.degradation_reason if evidence.rag_result else None
+            ),
         )
         validate_advice_response(response)
         return response, token
@@ -250,6 +260,7 @@ class AdviceEngine:
                     result.latency_ms,
                     result.degraded,
                     result.degradation_reason,
+                    result.corpus_version,
                 )
         if hits:
             first = hits[0].chunk

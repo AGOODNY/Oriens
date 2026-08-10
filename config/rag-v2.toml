@@ -1,0 +1,54 @@
+[app]
+language = "zh-CN"
+poll_interval_ms = 100
+recent_event_limit = 8
+knowledge_path = "data/knowledge/items.zh-CN.json"
+
+[rag]
+pipeline_version = 2
+content_version = "rag-v2-huiji-2026-08-10"
+source_path = "data/knowledge/rag-v2/chunks.jsonl"
+chunks_path = "data/knowledge/rag-v2/chunks.jsonl"
+manifest_path = "data/knowledge/rag-v2/manifest.json"
+entities_path = "data/knowledge/rag-v2/entities.jsonl"
+redirects_path = "data/knowledge/rag-v2/redirects.jsonl"
+dependency_audit_path = "data/knowledge/rag-v2/dependency-audit.json"
+lua_facts_path = "data/knowledge/rag-v2/lua-facts.jsonl"
+overrides_path = "data/dictionaries/rag-v2-overrides.json"
+raw_paths = [
+  "data/raw/huijiwiki/isaac-2026-08-10/pages.jsonl",
+  "data/raw/huijiwiki/isaac-templates-modules-2026-08-10/pages.jsonl",
+]
+index_path = "data/indexes/rag-v2.sqlite"
+eval_path = "data/eval/rag-v2.json"
+game_version = "Repentance+ 1.9.7.17.J460"
+vector_enabled = true
+vector_model_id = "BAAI/bge-m3"
+vector_model_path = "data/models/bge-m3"
+vector_dimension = 1024
+vector_min_similarity = 0.58
+vector_query_timeout_seconds = 8.0
+retrieval_top_k = 5
+vector_backend = "sqlite-vec"
+vector_index_path = "data/indexes/rag-v2.sqlite"
+vector_batch_size = 32
+vector_max_sequence_length = 256
+
+[providers.qwen]
+region = "cn-beijing"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+api_key_env = "DASHSCOPE_API_KEY"
+timeout_seconds = 8.0
+max_retries = 1
+
+[model_roles.advice]
+provider = "qwen"
+model_id = "qwen3.7-flash"
+display_name = "千问 3.7 Flash"
+input_price_per_million_cny = 0.2
+output_price_per_million_cny = 0.8
+pricing_input_limit_tokens = 32768
+pricing_checked_on = "2026-08-10"
+
+[budget]
+run_limit_cny = 0.20

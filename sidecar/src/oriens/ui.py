@@ -374,12 +374,23 @@ class OverlayWindow(QMainWindow):
             debug_lines = []
             for hit in response.rag_hits:
                 methods = "+".join(hit.methods)
+                scores = ", ".join(
+                    f"{name}={value:.3f}" for name, value in sorted(hit.scores.items())
+                )
                 debug_lines.append(
                     f"{hit.chunk.entity_type}:{hit.chunk.entity_id} · {methods} · "
-                    f"{hit.score:.3f} · {hit.chunk.source.title}"
+                    f"总分 {hit.score:.3f}（{scores}）· {hit.chunk.source.title}"
                 )
             suffix = " · 关键词降级" if response.retrieval_degraded else " · 混合检索"
-            debug_lines.append(f"延迟 {response.retrieval_latency_ms:.1f} ms{suffix}")
+            status = (
+                f"；{response.retrieval_degradation_reason}"
+                if response.retrieval_degradation_reason
+                else ""
+            )
+            debug_lines.append(
+                f"语料 {response.retrieval_corpus_version} · "
+                f"延迟 {response.retrieval_latency_ms:.1f} ms{suffix}{status}"
+            )
             self.rag_debug_label.setText("\n".join(debug_lines))
         else:
             self.rag_debug_label.setText("阶段 1 固定资料回退；没有可显示的 RAG 命中。")

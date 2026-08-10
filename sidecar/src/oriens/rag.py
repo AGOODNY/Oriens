@@ -19,6 +19,26 @@ class RagError(RuntimeError):
     """本地 RAG 数据或索引不可用。"""
 
 
+_GENERIC_CONTAINED_ALIASES = {
+    "道具",
+    "物品",
+    "角色",
+    "人物",
+    "房间",
+    "章节",
+    "路线",
+    "机制",
+    "模组",
+    "item",
+    "room",
+    "character",
+    "route",
+    "mod",
+    "isaac",
+    "wiki",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class RagSource:
     id: str
@@ -27,6 +47,7 @@ class RagSource:
     source_type: str
     acquired_on: str
     license_note: str
+    canonical_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +66,12 @@ class RagChunk:
     content_version: str
     checksum: str
     stale: bool
+    page_id: int | None = None
+    revision_id: int | None = None
+    revision_timestamp: str | None = None
+    source_material_type: str | None = None
+    raw_document_id: str | None = None
+    redirect_sources: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +111,7 @@ class RagResult:
     latency_ms: float
     degraded: bool
     degradation_reason: str | None = None
+    corpus_version: str = "unknown"
 
     @property
     def no_answer(self) -> bool:
@@ -96,6 +124,7 @@ class RagResult:
             "latency_ms": self.latency_ms,
             "degraded": self.degraded,
             "degradation_reason": self.degradation_reason,
+            "corpus_version": self.corpus_version,
             "no_answer": self.no_answer,
         }
 
@@ -158,7 +187,9 @@ class RagService:
         started = time.perf_counter()
         text = query.strip()
         if not text or top_k < 1:
-            return RagResult(query, (), 0.0, self._vector is None, "空查询")
+            return RagResult(
+                query, (), 0.0, self._vector is None, "空查询", self._corpus_version()
+            )
         active_filters = filters or RagFilters()
         candidates: dict[str, _Candidate] = {}
         with closing(self._connect()) as db:
@@ -224,8 +255,35 @@ class RagService:
             )
             hits.append(RagHit(candidate.chunk, methods, dict(scores), round(score, 6)))
         hits.sort(key=lambda hit: (-hit.score, hit.chunk.entity_type, hit.chunk.entity_id, hit.chunk.chunk_id))
+        diversified: list[RagHit] = []
+        per_entity: dict[str, int] = {}
+        for hit in hits:
+            count = per_entity.get(hit.chunk.entity_id, 0)
+            if count >= 2:
+                continue
+            diversified.append(hit)
+            per_entity[hit.chunk.entity_id] = count + 1
+            if len(diversified) >= top_k:
+                break
         elapsed = (time.perf_counter() - started) * 1000
-        return RagResult(text, tuple(hits[:top_k]), round(elapsed, 3), degraded, reason)
+        return RagResult(
+            text,
+            tuple(diversified),
+            round(elapsed, 3),
+            degraded,
+            reason if degraded else None,
+            self._corpus_version(),
+        )
+
+    def _corpus_version(self) -> str:
+        with closing(self._connect()) as db:
+            try:
+                row = db.execute(
+                    "SELECT value FROM metadata WHERE key='content_version'"
+                ).fetchone()
+            except sqlite3.OperationalError:
+                return "unknown"
+        return str(row[0]) if row else "unknown"
 
     def _connect(self) -> sqlite3.Connection:
         try:
@@ -258,22 +316,41 @@ class RagService:
         normalized = normalize_alias(query)
         if not normalized:
             return []
+        clauses = ["a.normalized=?"]
+        params: list[Any] = [normalized]
+        _append_filter_clauses(clauses, params, filters, table_alias="c")
         rows = db.execute(
             "SELECT a.chunk_id, a.normalized FROM aliases a "
-            "JOIN chunks c ON c.chunk_id=a.chunk_id WHERE c.stale=0"
+            "JOIN chunks c ON c.chunk_id=a.chunk_id WHERE " + " AND ".join(clauses),
+            params,
         ).fetchall()
         matches: list[tuple[str, float]] = []
         for row in rows:
+            matches.append((row["chunk_id"], 1.0))
+        if matches or len(normalized) < 3 or normalized.isdigit() or _looks_like_exact_id(query):
+            return matches
+        contains_clauses = [
+            "length(a.normalized)>=2",
+            "a.normalized NOT GLOB '[0-9]*'",
+            "instr(?, a.normalized)>0",
+        ]
+        contains_params: list[Any] = [normalized]
+        _append_filter_clauses(
+            contains_clauses, contains_params, filters, table_alias="c"
+        )
+        contains_rows = db.execute(
+            "SELECT a.chunk_id, a.normalized FROM aliases a "
+            "JOIN chunks c ON c.chunk_id=a.chunk_id WHERE "
+            + " AND ".join(contains_clauses)
+            + " ORDER BY length(a.normalized) DESC, a.chunk_id LIMIT 100",
+            contains_params,
+        )
+        for row in contains_rows:
             alias = row["normalized"]
-            if alias == normalized:
-                matches.append((row["chunk_id"], 1.0))
-            elif (
-                len(alias) >= 2
-                and not alias.isdigit()
-                and not normalized.isdigit()
-                and alias in normalized
-            ):
-                matches.append((row["chunk_id"], 0.85))
+            if alias in _GENERIC_CONTAINED_ALIASES:
+                continue
+            quality = min(0.99, 0.80 + 0.19 * len(alias) / len(normalized))
+            matches.append((row["chunk_id"], quality))
         return matches
 
     @staticmethod
@@ -341,6 +418,31 @@ def _passes(chunk: RagChunk, filters: RagFilters) -> bool:
     return True
 
 
+def _append_filter_clauses(
+    clauses: list[str],
+    params: list[Any],
+    filters: RagFilters,
+    *,
+    table_alias: str,
+) -> None:
+    prefix = table_alias + "."
+    if not filters.include_stale:
+        clauses.append(prefix + "stale=0")
+    if filters.entity_types:
+        clauses.append(
+            prefix + "entity_type IN (%s)" % ",".join("?" * len(filters.entity_types))
+        )
+        params.extend(filters.entity_types)
+    if filters.game_version:
+        clauses.append(prefix + "game_version=?")
+        params.append(filters.game_version)
+    if filters.source_types:
+        clauses.append(
+            prefix + "source_type IN (%s)" % ",".join("?" * len(filters.source_types))
+        )
+        params.extend(filters.source_types)
+
+
 def _chunk_from_payload(payload: str) -> RagChunk:
     value = json.loads(payload)
     source = value["source"]
@@ -361,9 +463,16 @@ def _chunk_from_payload(payload: str) -> RagChunk:
             source_type=source["type"],
             acquired_on=value["acquired_on"],
             license_note=value["license_note"],
+            canonical_url=source.get("canonical_url"),
         ),
         game_version=value["game_version"],
         content_version=value["content_version"],
         checksum=value["checksum"],
         stale=bool(value["stale"]),
+        page_id=value.get("page_id"),
+        revision_id=value.get("revision_id"),
+        revision_timestamp=value.get("revision_timestamp"),
+        source_material_type=value.get("source_material_type"),
+        raw_document_id=value.get("raw_document_id"),
+        redirect_sources=tuple(value.get("redirect_sources", ())),
     )
