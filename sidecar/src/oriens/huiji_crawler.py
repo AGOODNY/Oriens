@@ -550,6 +550,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = HuijiCrawler(options).run()
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
+    except KeyboardInterrupt:
+        print("采集已由用户暂停；已完成批次的检查点仍然有效，可用相同命令续跑", file=sys.stderr)
+        return 130
     except (CrawlError, OSError) as exc:
         print(f"采集已安全停止：{exc}", file=sys.stderr)
         return 2
