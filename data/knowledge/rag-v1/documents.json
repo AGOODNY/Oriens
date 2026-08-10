@@ -1,0 +1,246 @@
+{
+  "schema_version": 1,
+  "corpus_id": "oriens-core-rag-zh-en-v1",
+  "content_version": "1.0.0",
+  "game_version": "Repentance+ 1.9.7.17.J460",
+  "curated_on": "2026-08-10",
+  "scope": {
+    "included": ["核心道具", "常见协同与冲突", "主要角色机制", "常用路线", "常见房间"],
+    "excluded": ["完整 Wiki 镜像", "Modded 内容", "语音", "视觉", "长期记忆", "联网搜索语料"]
+  },
+  "documents": [
+    {
+      "document_id": "item:1:overview:v1", "entity_type": "item", "entity_id": "collectible:1",
+      "name_zh": "悲伤洋葱", "name_en": "The Sad Onion", "aliases": ["sad onion", "洋葱", "1号道具"],
+      "title": "悲伤洋葱基础机制", "text": "悲伤洋葱提供稳定的射速提升。它不改变基础攻击形态，通常适合需要提高输出频率的构筑。",
+      "source": {"id": "wiki.gg:item/sad-onion", "title": "The Sad Onion - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/The_Sad_Onion", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:3:overview:v1", "entity_type": "item", "entity_id": "collectible:3",
+      "name_zh": "弯勺魔术", "name_en": "Spoon Bender", "aliases": ["spoon bender", "弯勺", "追踪勺"],
+      "title": "弯勺魔术基础机制", "text": "弯勺魔术让泪弹获得追踪能力，能提高对移动目标的命中稳定性，并与多数泪弹效果自然组合。",
+      "source": {"id": "wiki.gg:item/spoon-bender", "title": "Spoon Bender - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Spoon_Bender", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:4:overview:v1", "entity_type": "item", "entity_id": "collectible:4",
+      "name_zh": "柯里吉的头", "name_en": "Cricket's Head", "aliases": ["crickets head", "cricket's head", "板球头", "猫头"],
+      "title": "柯里吉的头基础机制", "text": "柯里吉的头提供直接伤害提升并影响伤害倍率计算。它是大多数攻击构筑都能受益的高优先级道具。",
+      "source": {"id": "wiki.gg:item/crickets-head", "title": "Cricket's Head - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Cricket%27s_Head", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:12:overview:v1", "entity_type": "item", "entity_id": "collectible:12",
+      "name_zh": "魔法蘑菇", "name_en": "Magic Mushroom", "aliases": ["magic mush", "magic mushroom", "魔菇", "蘑菇"],
+      "title": "魔法蘑菇基础机制", "text": "魔法蘑菇同时强化伤害、移速、射程和生命上限，属于覆盖面很广的综合提升。",
+      "source": {"id": "wiki.gg:item/magic-mushroom", "title": "Magic Mushroom - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Magic_Mushroom", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:105:overview:v1", "entity_type": "item", "entity_id": "collectible:105",
+      "name_zh": "六面骰", "name_en": "The D6", "aliases": ["d6", "the d6", "六面骰子", "重置骰"],
+      "title": "六面骰基础机制", "text": "六面骰是主动道具，可重置当前房间内的道具底座。充能、房间资源与道具池会决定何时重置更有价值。",
+      "source": {"id": "wiki.gg:item/d6", "title": "The D6 - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/The_D6", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:114:overview:v1", "entity_type": "item", "entity_id": "collectible:114",
+      "name_zh": "妈妈的菜刀", "name_en": "Mom's Knife", "aliases": ["moms knife", "mom's knife", "妈刀", "菜刀"],
+      "title": "妈妈的菜刀基础机制", "text": "妈妈的菜刀把普通泪弹替换为可蓄力投出的刀。攻击距离与蓄力相关，许多泪弹特效会产生专门的组合规则。",
+      "source": {"id": "wiki.gg:item/moms-knife", "title": "Mom's Knife - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Mom%27s_Knife", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:118:overview:v1", "entity_type": "item", "entity_id": "collectible:118",
+      "name_zh": "硫磺火", "name_en": "Brimstone", "aliases": ["brim", "brimstone", "硫磺", "红激光"],
+      "title": "硫磺火基础机制", "text": "硫磺火把普通泪弹替换为可蓄力的贯穿激光。射速会影响蓄力时间，部分攻击形态会与它形成专门协同。",
+      "source": {"id": "wiki.gg:item/brimstone", "title": "Brimstone - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Brimstone", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:149:overview:v1", "entity_type": "item", "entity_id": "collectible:149",
+      "name_zh": "吐根酊", "name_en": "Ipecac", "aliases": ["ipecac", "吐根", "爆炸泪"],
+      "title": "吐根酊基础机制", "text": "吐根酊把攻击变为高抛物线爆炸泪弹，显著改变伤害与射击节奏。近距离爆炸会带来自伤风险。",
+      "source": {"id": "wiki.gg:item/ipecac", "title": "Ipecac - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Ipecac", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:169:overview:v1", "entity_type": "item", "entity_id": "collectible:169",
+      "name_zh": "独眼巨人", "name_en": "Polyphemus", "aliases": ["polyphemus", "大眼", "独眼"],
+      "title": "独眼巨人基础机制", "text": "独眼巨人大幅提高单发伤害，但会降低射速。它偏向高单发输出，实际收益取决于当前射速与攻击形态。",
+      "source": {"id": "wiki.gg:item/polyphemus", "title": "Polyphemus - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Polyphemus", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:182:overview:v1", "entity_type": "item", "entity_id": "collectible:182",
+      "name_zh": "圣心", "name_en": "Sacred Heart", "aliases": ["sacred heart", "圣心", "白心"],
+      "title": "圣心基础机制", "text": "圣心提供显著伤害提升、追踪泪弹和生命收益，同时会改变射速。它通常是高价值的天使房道具。",
+      "source": {"id": "wiki.gg:item/sacred-heart", "title": "Sacred Heart - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Sacred_Heart", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:223:overview:v1", "entity_type": "item", "entity_id": "collectible:223",
+      "name_zh": "纵火狂", "name_en": "Pyromaniac", "aliases": ["pyromaniac", "纵火", "火免", "爆炸免疫"],
+      "title": "纵火狂基础机制", "text": "纵火狂能免疫爆炸造成的伤害，并让部分爆炸转化为治疗机会。它能显著降低爆炸类构筑的自伤风险。",
+      "source": {"id": "wiki.gg:item/pyromaniac", "title": "Pyromaniac - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Pyromaniac", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:330:overview:v1", "entity_type": "item", "entity_id": "collectible:330",
+      "name_zh": "豆浆", "name_en": "Soy Milk", "aliases": ["soy milk", "豆奶", "豆浆"],
+      "title": "豆浆基础机制", "text": "豆浆极大提高射速并明显降低单发伤害，适合依赖触发频率的效果；与固定伤害或保留属性的机制组合时尤其值得评估。",
+      "source": {"id": "wiki.gg:item/soy-milk", "title": "Soy Milk - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Soy_Milk", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:331:overview:v1", "entity_type": "item", "entity_id": "collectible:331",
+      "name_zh": "神性", "name_en": "Godhead", "aliases": ["godhead", "神头", "神性"],
+      "title": "神性基础机制", "text": "神性提供伤害与追踪能力，并让泪弹带有伤害光环。光环适合覆盖体积较大或移动密集的目标。",
+      "source": {"id": "wiki.gg:item/godhead", "title": "Godhead - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Godhead", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:350:overview:v1", "entity_type": "item", "entity_id": "collectible:350",
+      "name_zh": "剧毒休克", "name_en": "Toxic Shock", "aliases": ["toxic shock", "毒休克", "剧毒"],
+      "title": "剧毒休克基础机制", "text": "剧毒休克在进入新房间时让敌人中毒，伤害与角色当前伤害相关，能为普通房间提供免费的开场群体伤害。",
+      "source": {"id": "wiki.gg:item/toxic-shock", "title": "Toxic Shock - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Toxic_Shock", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:395:overview:v1", "entity_type": "item", "entity_id": "collectible:395",
+      "name_zh": "科技 X", "name_en": "Tech X", "aliases": ["tech x", "科技x", "科技十", "激光环"],
+      "title": "科技 X 基础机制", "text": "科技 X 把攻击替换为可蓄力的激光环。环的大小与蓄力相关，能够穿透敌人并与多种攻击修正形成专门组合。",
+      "source": {"id": "wiki.gg:item/tech-x", "title": "Tech X - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Tech_X", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:562:overview:v1", "entity_type": "item", "entity_id": "collectible:562",
+      "name_zh": "谷底石", "name_en": "Rock Bottom", "aliases": ["rock bottom", "石底", "谷底石", "属性锁"],
+      "title": "谷底石基础机制", "text": "谷底石让已显示属性不会低于获得后达到过的最高值。负面修正仍会在内部累计，因此拾取顺序会影响后续属性提升。",
+      "source": {"id": "wiki.gg:item/rock-bottom", "title": "Rock Bottom - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Rock_Bottom", "type": "community_wiki"}
+    },
+    {
+      "document_id": "item:678:overview:v1", "entity_type": "item", "entity_id": "collectible:678",
+      "name_zh": "剖腹产", "name_en": "C Section", "aliases": ["c section", "c-section", "剖腹", "胎儿泪"],
+      "title": "剖腹产基础机制", "text": "剖腹产把泪弹替换为会追逐敌人的胎儿攻击。它能继承多种泪弹效果，但部分组合具有专门表现。",
+      "source": {"id": "wiki.gg:item/c-section", "title": "C Section - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/C_Section", "type": "community_wiki"}
+    },
+
+    {
+      "document_id": "synergy:118+114:v1", "entity_type": "synergy", "entity_id": "synergy:collectible:118+114",
+      "name_zh": "硫磺火与妈妈的菜刀", "name_en": "Brimstone + Mom's Knife", "aliases": ["硫磺火 妈刀", "brimstone moms knife", "brim knife", "红激光菜刀"],
+      "title": "硫磺火与妈妈的菜刀协同", "text": "硫磺火和妈妈的菜刀都会替换基础攻击，组合后使用专门的复合攻击规则，不应把两者当作彼此独立的普通泪弹加成。评估时应关注蓄力节奏、攻击距离和当前版本表现。",
+      "source": {"id": "wiki.gg:synergy/brimstone-moms-knife", "title": "Mom's Knife interactions - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Mom%27s_Knife#Interactions", "type": "community_wiki"}
+    },
+    {
+      "document_id": "synergy:330+562:v1", "entity_type": "synergy", "entity_id": "synergy:collectible:330+562",
+      "name_zh": "豆浆与谷底石", "name_en": "Soy Milk + Rock Bottom", "aliases": ["豆浆 石底", "豆浆和石底", "豆奶 谷底石", "soy milk rock bottom", "豆浆属性锁"],
+      "title": "豆浆与谷底石拾取顺序", "text": "先拥有谷底石再拾取豆浆时，豆浆的高射速可以保留，而显示伤害不会被压低。若先拿豆浆再拿谷底石，谷底石不会追溯恢复获得前已经降低的属性；内部负面修正仍会影响之后的提升。",
+      "source": {"id": "wiki.gg:synergy/soy-milk-rock-bottom", "title": "Rock Bottom interactions - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Rock_Bottom#Interactions", "type": "community_wiki"}
+    },
+    {
+      "document_id": "synergy:149+223:v1", "entity_type": "synergy", "entity_id": "synergy:collectible:149+223",
+      "name_zh": "吐根酊与纵火狂", "name_en": "Ipecac + Pyromaniac", "aliases": ["吐根 纵火", "吐根配纵火狂", "ipecac pyromaniac", "爆炸泪火免"],
+      "title": "吐根酊与纵火狂协同", "text": "吐根酊的主要风险是近距离爆炸自伤；纵火狂提供爆炸免疫并可让部分爆炸带来治疗，因此能显著提高吐根酊构筑的容错。",
+      "source": {"id": "wiki.gg:synergy/ipecac-pyromaniac", "title": "Ipecac interactions - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Ipecac#Interactions", "type": "community_wiki"}
+    },
+    {
+      "document_id": "synergy:395+118:v1", "entity_type": "synergy", "entity_id": "synergy:collectible:395+118",
+      "name_zh": "科技 X 与硫磺火", "name_en": "Tech X + Brimstone", "aliases": ["科技x 硫磺火", "tech x brimstone", "激光环 红激光"],
+      "title": "科技 X 与硫磺火协同", "text": "科技 X 与硫磺火组合后会形成具有硫磺火特性的蓄力激光环。两者都改变基础攻击，实际输出应按复合形态而不是两套独立攻击计算。",
+      "source": {"id": "wiki.gg:synergy/tech-x-brimstone", "title": "Tech X interactions - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Tech_X#Interactions", "type": "community_wiki"}
+    },
+    {
+      "document_id": "synergy:182+331:v1", "entity_type": "synergy", "entity_id": "synergy:collectible:182+331",
+      "name_zh": "圣心与神性", "name_en": "Sacred Heart + Godhead", "aliases": ["圣心 神性", "圣心 神头", "sacred heart godhead"],
+      "title": "圣心与神性协同", "text": "圣心和神性都能强化伤害与追踪；神性的泪弹光环进一步补充范围伤害。组合后通常同时改善命中稳定性、直接伤害和贴近目标时的持续伤害。",
+      "source": {"id": "wiki.gg:synergy/sacred-heart-godhead", "title": "Godhead interactions - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Godhead#Interactions", "type": "community_wiki"}
+    },
+
+    {
+      "document_id": "character:0:isaac:v1", "entity_type": "character", "entity_id": "player:0",
+      "name_zh": "以撒", "name_en": "Isaac", "aliases": ["isaac", "白板", "以撒本体"],
+      "title": "以撒角色机制", "text": "以撒是基础角色，初始属性均衡。解锁起始六面骰后，他能重置道具底座，因此应围绕充能、道具池和剩余房间规划重置机会。",
+      "source": {"id": "wiki.gg:character/isaac", "title": "Isaac - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Isaac", "type": "community_wiki"}
+    },
+    {
+      "document_id": "character:7:azazel:v1", "entity_type": "character", "entity_id": "player:7",
+      "name_zh": "阿撒泻勒", "name_en": "Azazel", "aliases": ["azazel", "阿萨谢尔", "阿撒", "短硫磺"],
+      "title": "阿撒泻勒角色机制", "text": "阿撒泻勒拥有飞行和短距离硫磺火，前期爆发强但射程短。路线与道具选择应优先补足射程和安全输出距离。",
+      "source": {"id": "wiki.gg:character/azazel", "title": "Azazel - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Azazel", "type": "community_wiki"}
+    },
+    {
+      "document_id": "character:10:lost:v1", "entity_type": "character", "entity_id": "player:10",
+      "name_zh": "游魂", "name_en": "The Lost", "aliases": ["the lost", "lost", "游魂", "迷失者"],
+      "title": "游魂角色机制", "text": "游魂没有传统生命值，主要依赖神圣斗篷抵挡每个房间的首次伤害，并可免费进入恶魔交易。生存优先级高于红心类收益。",
+      "source": {"id": "wiki.gg:character/lost", "title": "The Lost - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/The_Lost", "type": "community_wiki"}
+    },
+    {
+      "document_id": "character:18:bethany:v1", "entity_type": "character", "entity_id": "player:18",
+      "name_zh": "伯大尼", "name_en": "Bethany", "aliases": ["bethany", "伯大尼", "书妹", "魂火妹"],
+      "title": "伯大尼角色机制", "text": "伯大尼不能获得魂心作为生命，而会把魂心转为主动道具的备用充能。美德之书能生成魂火，因此主动道具频率和魂心资源管理很重要。",
+      "source": {"id": "wiki.gg:character/bethany", "title": "Bethany - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Bethany", "type": "community_wiki"}
+    },
+    {
+      "document_id": "character:19:jacob-esau:v1", "entity_type": "character", "entity_id": "player:19",
+      "name_zh": "雅各和以扫", "name_en": "Jacob and Esau", "aliases": ["jacob and esau", "jacob esau", "双子", "雅各以扫", "红蓝人"],
+      "title": "雅各和以扫角色机制", "text": "雅各和以扫是同时行动的两个角色，生命、道具和碰撞体积分别计算。分配道具时要兼顾集中输出与两人的生存短板，并留意双碰撞箱带来的走位风险。",
+      "source": {"id": "wiki.gg:character/jacob-esau", "title": "Jacob and Esau - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Jacob_and_Esau", "type": "community_wiki"}
+    },
+
+    {
+      "document_id": "route:chest:v1", "entity_type": "route", "entity_id": "route:chest",
+      "name_zh": "宝箱层路线", "name_en": "Chest Route", "aliases": ["chest", "宝箱层", "去宝箱层", "天堂线", "教堂宝箱"],
+      "title": "宝箱层常用路线", "text": "击败妈妈后取得全家福，继续前往教堂并击败以撒，随后进入宝箱层。没有全家福时，通常不能按标准路径从教堂继续进入宝箱层。",
+      "source": {"id": "wiki.gg:route/chest", "title": "The Chest - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/The_Chest", "type": "community_wiki"}
+    },
+    {
+      "document_id": "route:dark-room:v1", "entity_type": "route", "entity_id": "route:dark-room",
+      "name_zh": "暗室路线", "name_en": "Dark Room Route", "aliases": ["dark room", "暗室", "去暗室", "地狱线", "阴性底片路线"],
+      "title": "暗室常用路线", "text": "击败妈妈后取得底片，继续前往阴间并击败撒旦，随后进入暗室。没有底片时，通常不能按标准路径从阴间继续进入暗室。",
+      "source": {"id": "wiki.gg:route/dark-room", "title": "Dark Room - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Dark_Room", "type": "community_wiki"}
+    },
+    {
+      "document_id": "route:mother:v1", "entity_type": "route", "entity_id": "route:mother",
+      "name_zh": "母亲路线", "name_en": "Mother Route", "aliases": ["mother route", "mother", "母亲", "母亲线", "去母亲", "尸宫线", "下水道矿洞陵墓"],
+      "title": "母亲路线关键步骤", "text": "母亲路线经过下水道或污水井、矿洞或灰坑、陵墓或炼狱。收集两块刀片后可打开通往尸宫的门，并在尸宫 II 挑战母亲。",
+      "source": {"id": "wiki.gg:route/mother", "title": "Mother - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Mother", "type": "community_wiki"}
+    },
+    {
+      "document_id": "route:beast:v1", "entity_type": "route", "entity_id": "route:beast",
+      "name_zh": "祸兽路线", "name_en": "The Beast Route", "aliases": ["beast route", "the beast", "祸兽", "祸兽线", "去祸兽", "回家线", "上升线"],
+      "title": "祸兽路线关键步骤", "text": "在深牢 II 击败妈妈后，用传送牌离开 Boss 房并携带全家福或底片开启初始房间的奇怪的门。取得爸爸的便条后开始上升，抵达家并挑战教条与祸兽。",
+      "source": {"id": "wiki.gg:route/beast", "title": "The Beast - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/The_Beast", "type": "community_wiki"}
+    },
+    {
+      "document_id": "route:mega-satan:v1", "entity_type": "route", "entity_id": "route:mega-satan",
+      "name_zh": "超级撒旦路线", "name_en": "Mega Satan Route", "aliases": ["mega satan", "超级撒旦", "金门", "钥匙碎片路线"],
+      "title": "超级撒旦路线关键步骤", "text": "标准做法是在天使房炸毁天使雕像并击败天使，收集两块钥匙碎片组成金钥匙；到达宝箱层或暗室后即可开启出生房间的金门挑战超级撒旦。",
+      "source": {"id": "wiki.gg:route/mega-satan", "title": "Mega Satan - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Mega_Satan", "type": "community_wiki"}
+    },
+
+    {
+      "document_id": "room:treasure:v1", "entity_type": "room", "entity_id": "room:4",
+      "name_zh": "宝箱房", "name_en": "Treasure Room", "aliases": ["treasure room", "item room", "道具房", "宝箱房", "金门房"],
+      "title": "宝箱房机制", "text": "宝箱房通常提供一个来自宝箱房道具池的道具底座，多数楼层需要钥匙进入。是否立即取走道具要结合重置能力和当前路线资源判断。",
+      "source": {"id": "wiki.gg:room/treasure", "title": "Treasure Room - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Treasure_Room", "type": "community_wiki"}
+    },
+    {
+      "document_id": "room:shop:v1", "entity_type": "room", "entity_id": "room:2",
+      "name_zh": "商店", "name_en": "Shop", "aliases": ["shop", "商店", "商店房"],
+      "title": "商店机制", "text": "商店使用硬币购买道具和补给。购买顺序应考虑钥匙、炸弹、魂心等即时资源与商店道具的长期收益。",
+      "source": {"id": "wiki.gg:room/shop", "title": "Shop - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Shop", "type": "community_wiki"}
+    },
+    {
+      "document_id": "room:devil:v1", "entity_type": "room", "entity_id": "room:14",
+      "name_zh": "恶魔房", "name_en": "Devil Room", "aliases": ["devil room", "devil deal", "恶魔房", "恶魔交易"],
+      "title": "恶魔房机制", "text": "恶魔房通常以生命容器等资源交换道具。进入和交易会影响后续天使房机会，因此应同时评估生存、当前构筑和路线目标。",
+      "source": {"id": "wiki.gg:room/devil", "title": "Devil Room - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Devil_Room", "type": "community_wiki"}
+    },
+    {
+      "document_id": "room:angel:v1", "entity_type": "room", "entity_id": "room:15",
+      "name_zh": "天使房", "name_en": "Angel Room", "aliases": ["angel room", "angel deal", "天使房", "白房"],
+      "title": "天使房机制", "text": "天使房通常提供无需生命交易的奖励。炸毁天使雕像可触发天使战斗并取得钥匙碎片，是标准超级撒旦路线的重要步骤。",
+      "source": {"id": "wiki.gg:room/angel", "title": "Angel Room - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Angel_Room", "type": "community_wiki"}
+    },
+    {
+      "document_id": "room:sacrifice:v1", "entity_type": "room", "entity_id": "room:5",
+      "name_zh": "献祭房", "name_en": "Sacrifice Room", "aliases": ["sacrifice room", "献祭房", "刺房献祭", "献祭尖刺"],
+      "title": "献祭房机制", "text": "献祭房中央尖刺会用受伤次数推进奖励序列。利用前必须评估可恢复生命、伤害免疫与路线目的，不能只看当前一次奖励。",
+      "source": {"id": "wiki.gg:room/sacrifice", "title": "Sacrifice Room - The Binding of Isaac: Rebirth Wiki", "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Sacrifice_Room", "type": "community_wiki"}
+    }
+  ],
+  "defaults": {
+    "acquired_on": "2026-08-10",
+    "game_version": "Repentance+ 1.9.7.17.J460",
+    "license_note": "wiki.gg 页面正文标注 CC BY-SA 4.0；本项目仅保存人工整理的短摘要、结构化事实和原页链接，未自动抓取完整页面。",
+    "content_version": "1.0.0",
+    "stale": false
+  }
+}

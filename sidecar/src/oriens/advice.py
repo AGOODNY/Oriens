@@ -11,6 +11,7 @@ from .budget import BudgetTracker, CostInfo
 from .knowledge import ItemKnowledge, LocalItemKnowledgeBase, Source
 from .modeling import ModelCancelled, ModelError, ModelRequest, ModelRouter
 from .protocol import GameEvent
+from .rag import RagFilters, RagHit, RagResult, RagService
 from .state import GameState
 
 
@@ -73,6 +74,9 @@ class AdviceResponse:
     item_name: str
     simulated: bool
     delivery_note: str | None = None
+    rag_hits: tuple[RagHit, ...] = ()
+    retrieval_latency_ms: float = 0.0
+    retrieval_degraded: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -86,6 +90,40 @@ class AdviceResponse:
             "item_name": self.item_name,
             "simulated": self.simulated,
             "delivery_note": self.delivery_note,
+            "rag_hits": [hit.as_dict() for hit in self.rag_hits],
+            "retrieval_latency_ms": self.retrieval_latency_ms,
+            "retrieval_degraded": self.retrieval_degraded,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _AdviceKnowledge:
+    collectible_id: int
+    name_zh: str
+    name_en: str
+    fallback_advice: str
+    fallback_reason: str
+    sources: tuple[Source, ...]
+    rag_result: RagResult | None
+
+    def prompt_context(self) -> dict[str, Any]:
+        return {
+            "collectible_id": self.collectible_id,
+            "name": self.name_zh,
+            "english_name": self.name_en,
+            "evidence": [
+                {
+                    "chunk_id": hit.chunk.chunk_id,
+                    "entity_type": hit.chunk.entity_type,
+                    "entity_id": hit.chunk.entity_id,
+                    "text": hit.chunk.text,
+                    "source_id": hit.chunk.source.id,
+                    "retrieval_methods": list(hit.methods),
+                    "score": hit.score,
+                }
+                for hit in (self.rag_result.hits if self.rag_result else ())
+            ],
+            "allowed_source_ids": [source.id for source in self.sources],
         }
 
 
@@ -97,24 +135,40 @@ class AdviceEngine:
         knowledge: LocalItemKnowledgeBase,
         router: ModelRouter,
         budget: BudgetTracker,
+        rag: RagService | None = None,
+        game_version: str | None = None,
     ) -> None:
         self.knowledge = knowledge
         self.router = router
         self.budget = budget
+        self.rag = rag
+        self.game_version = game_version
 
     def supports(self, event: GameEvent) -> bool:
-        return self.knowledge_for(event) is not None
+        collectible_id = self._collectible_id(event)
+        if collectible_id is None:
+            return False
+        if self.rag is not None:
+            return (
+                self.rag.describe_entity("item", f"collectible:{collectible_id}")
+                is not None
+            )
+        return self.knowledge.find(collectible_id) is not None
 
     def knowledge_for(self, event: GameEvent) -> ItemKnowledge | None:
-        if event.type != "collectible_spawned":
-            return None
-        collectible_id = event.payload.get("collectible_id")
-        if type(collectible_id) is not int:
-            return None
-        # ROOM_TREASURE = 4。阶段 1 只做“进入道具房”切片。
-        if event.context.get("room_type") != 4:
+        collectible_id = self._collectible_id(event)
+        if collectible_id is None:
             return None
         return self.knowledge.find(collectible_id)
+
+    def item_descriptor(self, collectible_id: int) -> tuple[str, str] | None:
+        item = self.knowledge.find(collectible_id)
+        if item is not None:
+            return item.name_zh, item.name_en
+        if self.rag is None:
+            return None
+        chunk = self.rag.describe_entity("item", f"collectible:{collectible_id}")
+        return (chunk.name_zh, chunk.name_en) if chunk else None
 
     def generate(
         self,
@@ -122,11 +176,14 @@ class AdviceEngine:
         cancel: Event | None = None,
     ) -> tuple[AdviceResponse, StateToken]:
         cancel_event = cancel or Event()
-        item = self.knowledge_for(event)
-        if item is None:
+        collectible_id = self._collectible_id(event)
+        if collectible_id is None:
             raise AdviceError("当前事件不是已覆盖的道具房道具")
-        token = StateToken.from_event(event, item.collectible_id)
-        model_request = self._make_request(event, item)
+        evidence = self._retrieve_knowledge(collectible_id)
+        if evidence is None:
+            raise AdviceError("当前道具没有可追溯的本地资料")
+        token = StateToken.from_event(event, collectible_id)
+        model_request = self._make_request(event, evidence)
         delivery_note: str | None = None
 
         if self.router.online and not self.budget.can_call_online():
@@ -143,7 +200,7 @@ class AdviceEngine:
                 )
                 delivery_note = "网络模型不可用，已改用本地模拟建议。"
 
-        allowed_sources = {source.id: source for source in item.sources}
+        allowed_sources = {source.id: source for source in evidence.sources}
         draft = validate_advice_draft(
             routed.content,
             expected_state_seq=event.seq,
@@ -158,16 +215,75 @@ class AdviceEngine:
             sources=sources,
             state_seq=draft.state_seq,
             cost=cost,
-            collectible_id=item.collectible_id,
-            item_name=f"{item.name_zh} / {item.name_en}",
+            collectible_id=collectible_id,
+            item_name=f"{evidence.name_zh} / {evidence.name_en}",
             simulated=routed.simulated,
             delivery_note=delivery_note,
+            rag_hits=evidence.rag_result.hits if evidence.rag_result else (),
+            retrieval_latency_ms=(evidence.rag_result.latency_ms if evidence.rag_result else 0.0),
+            retrieval_degraded=(evidence.rag_result.degraded if evidence.rag_result else True),
         )
         validate_advice_response(response)
         return response, token
 
+    def _retrieve_knowledge(self, collectible_id: int) -> _AdviceKnowledge | None:
+        legacy = self.knowledge.find(collectible_id)
+        result: RagResult | None = None
+        hits: tuple[RagHit, ...] = ()
+        if self.rag is not None:
+            result = self.rag.retrieve(
+                str(collectible_id),
+                filters=RagFilters(
+                    entity_types=("item",), game_version=self.game_version
+                ),
+                top_k=5,
+            )
+            hits = tuple(
+                hit
+                for hit in result.hits
+                if hit.chunk.entity_id == f"collectible:{collectible_id}"
+            )
+            if hits != result.hits:
+                result = RagResult(
+                    result.query,
+                    hits,
+                    result.latency_ms,
+                    result.degraded,
+                    result.degradation_reason,
+                )
+        if hits:
+            first = hits[0].chunk
+            sources: list[Source] = []
+            for hit in hits:
+                source = Source(hit.chunk.source.id, hit.chunk.source.title, hit.chunk.source.url)
+                if source.id not in {existing.id for existing in sources}:
+                    sources.append(source)
+            fallback = legacy.advice_hint if legacy else "建议结合当前构筑评估后拾取。"
+            return _AdviceKnowledge(
+                collectible_id,
+                first.name_zh,
+                first.name_en,
+                fallback,
+                first.text,
+                tuple(sources[:5]),
+                result,
+            )
+        # 阶段 2 启用 RAG 后，不能退回到未参与本次检索的旧引用。
+        # 旧知识库回退仅保留给未配置 RAG 的阶段 1 运行和回归测试。
+        if self.rag is None and legacy is not None:
+            return _AdviceKnowledge(
+                collectible_id,
+                legacy.name_zh,
+                legacy.name_en,
+                legacy.advice_hint,
+                legacy.facts[0],
+                legacy.sources,
+                result,
+            )
+        return None
+
     @staticmethod
-    def _make_request(event: GameEvent, item: ItemKnowledge) -> ModelRequest:
+    def _make_request(event: GameEvent, item: _AdviceKnowledge) -> ModelRequest:
         system_prompt = (
             "你是 Oriens 游戏助手。仅依据提供的本地资料生成简体中文短建议。"
             "必须输出一个 JSON 对象，字段严格为 advice、reason、confidence、sources、"
@@ -183,12 +299,19 @@ class AdviceEngine:
             system_prompt,
             user_prompt,
             {
-                "fallback_advice": item.advice_hint,
-                "fallback_reason": item.facts[0],
+                "fallback_advice": item.fallback_advice,
+                "fallback_reason": item.fallback_reason,
                 "allowed_source_ids": [source.id for source in item.sources],
                 "state_seq": event.seq,
             },
         )
+
+    @staticmethod
+    def _collectible_id(event: GameEvent) -> int | None:
+        if event.type != "collectible_spawned" or event.context.get("room_type") != 4:
+            return None
+        collectible_id = event.payload.get("collectible_id")
+        return collectible_id if type(collectible_id) is int else None
 
 
 def validate_advice_draft(

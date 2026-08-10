@@ -5,11 +5,18 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "oriens-sidecar"
 version = "0.1.0"
-description = "Oriens 游戏日志伴侣与阶段 1 无语音建议悬浮窗"
-readme = "README.md"
+description = "Oriens 游戏日志伴侣与阶段 2 本地混合检索建议悬浮窗"
+readme = {text = "Oriens: Your In-Game Guide local sidecar", content-type = "text/plain"}
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "PySide6>=6.8,<7",
+]
+
+[project.optional-dependencies]
+rag = [
+    "sentence-transformers>=5.0,<6",
+    "sqlite-vec>=0.1.6,<0.2",
+    "psutil>=7,<8",
 ]
 
 [project.scripts]

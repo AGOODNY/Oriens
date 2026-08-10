@@ -52,12 +52,30 @@ class BudgetSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class RagSettings:
+    source_path: Path
+    chunks_path: Path
+    manifest_path: Path
+    index_path: Path
+    eval_path: Path
+    game_version: str
+    vector_enabled: bool
+    vector_model_id: str
+    vector_model_path: Path
+    vector_dimension: int
+    vector_min_similarity: float
+    vector_query_timeout_seconds: float
+    retrieval_top_k: int
+
+
+@dataclass(frozen=True, slots=True)
 class OriensConfig:
     root: Path
     app: AppSettings
     providers: dict[str, ProviderSettings]
     model_roles: dict[str, ModelRoleSettings]
     budget: BudgetSettings
+    rag: RagSettings
 
     def provider_for(self, role: str) -> tuple[ProviderSettings, ModelRoleSettings]:
         try:
@@ -83,6 +101,7 @@ def load_config(path: Path | None = None) -> OriensConfig:
 
     app_raw = _section(raw, "app")
     budget_raw = _section(raw, "budget")
+    rag_raw = _section(raw, "rag")
     app = AppSettings(
         language=_string(app_raw, "language"),
         poll_interval_ms=_positive_int(app_raw, "poll_interval_ms"),
@@ -125,7 +144,24 @@ def load_config(path: Path | None = None) -> OriensConfig:
         )
 
     budget = BudgetSettings(run_limit_cny=_positive_float(budget_raw, "run_limit_cny"))
-    return OriensConfig(root, app, providers, roles, budget)
+    rag = RagSettings(
+        source_path=(root / _string(rag_raw, "source_path")).resolve(),
+        chunks_path=(root / _string(rag_raw, "chunks_path")).resolve(),
+        manifest_path=(root / _string(rag_raw, "manifest_path")).resolve(),
+        index_path=(root / _string(rag_raw, "index_path")).resolve(),
+        eval_path=(root / _string(rag_raw, "eval_path")).resolve(),
+        game_version=_string(rag_raw, "game_version"),
+        vector_enabled=_boolean(rag_raw, "vector_enabled"),
+        vector_model_id=_string(rag_raw, "vector_model_id"),
+        vector_model_path=(root / _string(rag_raw, "vector_model_path")).resolve(),
+        vector_dimension=_positive_int(rag_raw, "vector_dimension"),
+        vector_min_similarity=_nonnegative_float(rag_raw, "vector_min_similarity"),
+        vector_query_timeout_seconds=_positive_float(
+            rag_raw, "vector_query_timeout_seconds"
+        ),
+        retrieval_top_k=_positive_int(rag_raw, "retrieval_top_k"),
+    )
+    return OriensConfig(root, app, providers, roles, budget, rag)
 
 
 def load_api_key(variable_name: str, env_path: Path | None = None) -> str | None:
@@ -198,3 +234,10 @@ def _nonnegative_float(value: dict[str, Any], name: str) -> float:
     if type(result) not in {int, float} or result < 0:
         raise ConfigError(f"配置 {name} 必须是非负数")
     return float(result)
+
+
+def _boolean(value: dict[str, Any], name: str) -> bool:
+    result = value.get(name)
+    if type(result) is not bool:
+        raise ConfigError(f"配置 {name} 必须是布尔值")
+    return result

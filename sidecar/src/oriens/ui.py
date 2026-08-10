@@ -200,6 +200,20 @@ class OverlayWindow(QMainWindow):
         advice_layout.addWidget(self.metrics_label)
         layout.addWidget(advice_frame)
 
+        rag_caption = QLabel("检索调试")
+        rag_caption.setObjectName("caption")
+        layout.addWidget(rag_caption)
+        rag_scroll = QScrollArea()
+        rag_scroll.setObjectName("eventScroll")
+        rag_scroll.setWidgetResizable(True)
+        rag_scroll.setMaximumHeight(105)
+        self.rag_debug_label = QLabel("尚未执行检索")
+        self.rag_debug_label.setObjectName("events")
+        self.rag_debug_label.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.rag_debug_label.setWordWrap(True)
+        rag_scroll.setWidget(self.rag_debug_label)
+        layout.addWidget(rag_scroll)
+
         budget_frame = QFrame()
         budget_frame.setObjectName("card")
         budget_layout = QVBoxLayout(budget_frame)
@@ -316,11 +330,13 @@ class OverlayWindow(QMainWindow):
         collectible_id = event.payload.get("collectible_id")
         if type(collectible_id) is not int:
             return
-        item = self.knowledge.find(collectible_id)
-        if item is None:
+        descriptor = self.advice_engine.item_descriptor(collectible_id)
+        if descriptor is None:
             self.item_label.setText(f"未知道具 ID {collectible_id}\n本地资料暂未覆盖，未调用模型。")
+            self.rag_debug_label.setText("资料不足：实体词典与本地索引均未命中。")
             return
-        self.item_label.setText(f"{item.name_zh} / {item.name_en}（ID {collectible_id}）")
+        name_zh, name_en = descriptor
+        self.item_label.setText(f"{name_zh} / {name_en}（ID {collectible_id}）")
         if not self.advice_engine.supports(event):
             return
         self._cancel_pending()
@@ -354,6 +370,19 @@ class OverlayWindow(QMainWindow):
             f'<a href="{source.url}">{source.title}</a>' for source in response.sources
         ]
         self.source_label.setText("来源：" + " · ".join(links))
+        if response.rag_hits:
+            debug_lines = []
+            for hit in response.rag_hits:
+                methods = "+".join(hit.methods)
+                debug_lines.append(
+                    f"{hit.chunk.entity_type}:{hit.chunk.entity_id} · {methods} · "
+                    f"{hit.score:.3f} · {hit.chunk.source.title}"
+                )
+            suffix = " · 关键词降级" if response.retrieval_degraded else " · 混合检索"
+            debug_lines.append(f"延迟 {response.retrieval_latency_ms:.1f} ms{suffix}")
+            self.rag_debug_label.setText("\n".join(debug_lines))
+        else:
+            self.rag_debug_label.setText("阶段 1 固定资料回退；没有可显示的 RAG 命中。")
         mode = "模拟" if response.simulated else "在线"
         self.metrics_label.setText(
             f"置信度 {response.confidence:.0%} · 状态序号 {response.state_seq} · {mode}"
@@ -392,6 +421,8 @@ class OverlayWindow(QMainWindow):
         self.timer.stop()
         self._cancel_pending()
         self.tailer.close()
+        if self.advice_engine.rag is not None:
+            self.advice_engine.rag.close()
         self._executor.shutdown(wait=False, cancel_futures=True)
         event.accept()
 

@@ -2,6 +2,10 @@
 .env.*
 !.env.example
 
+# 发布正式版前仅保留本地项目文档，不同步到远程仓库
+README.md
+docs/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -20,6 +24,7 @@ data/logs/
 data/screenshots/
 data/audio/
 data/indexes/
+data/models/
 data/*.db
 data/*.sqlite*
 config/local.toml

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "eval_id": "oriens-rag-core-v1",
+  "game_version": "Repentance+ 1.9.7.17.J460",
+  "created_on": "2026-08-10",
+  "top_k": 5,
+  "thresholds": {
+    "recall_at_k": 0.90,
+    "mrr": 0.85,
+    "no_answer_accuracy": 1.0,
+    "keyword_p95_latency_ms": 50.0,
+    "hybrid_p95_latency_ms": 500.0
+  },
+  "cases": [
+    {"id": "item-id", "query": "118", "expected_entities": ["collectible:118"], "expected_sources": ["wiki.gg:item/brimstone"]},
+    {"id": "item-zh", "query": "硫磺火", "expected_entities": ["collectible:118"], "expected_sources": ["wiki.gg:item/brimstone"]},
+    {"id": "item-en", "query": "Brimstone", "expected_entities": ["collectible:118"], "expected_sources": ["wiki.gg:item/brimstone"]},
+    {"id": "item-alias", "query": "妈刀", "expected_entities": ["collectible:114"], "expected_sources": ["wiki.gg:item/moms-knife"]},
+    {"id": "item-en-normalized", "query": "moms knife", "expected_entities": ["collectible:114"], "expected_sources": ["wiki.gg:item/moms-knife"]},
+    {"id": "item-community-alias", "query": "石底", "expected_entities": ["collectible:562"], "expected_sources": ["wiki.gg:item/rock-bottom"]},
+    {"id": "synergy-order", "query": "豆浆和石底", "expected_entities": ["synergy:collectible:330+562"], "expected_sources": ["wiki.gg:synergy/soy-milk-rock-bottom"]},
+    {"id": "synergy-safety", "query": "吐根配纵火狂", "expected_entities": ["synergy:collectible:149+223"], "expected_sources": ["wiki.gg:synergy/ipecac-pyromaniac"]},
+    {"id": "synergy-en", "query": "tech x brimstone", "expected_entities": ["synergy:collectible:395+118"], "expected_sources": ["wiki.gg:synergy/tech-x-brimstone"]},
+    {"id": "conflict-transform", "query": "硫磺火 妈刀", "expected_entities": ["synergy:collectible:118+114"], "expected_sources": ["wiki.gg:synergy/brimstone-moms-knife"]},
+    {"id": "character-en", "query": "Jacob and Esau", "expected_entities": ["player:19"], "expected_sources": ["wiki.gg:character/jacob-esau"]},
+    {"id": "character-alias", "query": "双子", "expected_entities": ["player:19"], "expected_sources": ["wiki.gg:character/jacob-esau"]},
+    {"id": "character-mechanic", "query": "书妹", "expected_entities": ["player:18"], "expected_sources": ["wiki.gg:character/bethany"]},
+    {"id": "character-lost", "query": "游魂", "expected_entities": ["player:10"], "expected_sources": ["wiki.gg:character/lost"]},
+    {"id": "character-semantic", "query": "没有传统生命值，靠神圣斗篷挡住每个房间第一次伤害的角色", "filters": {"entity_types": ["character"]}, "expected_entities": ["player:10"], "expected_sources": ["wiki.gg:character/lost"]},
+    {"id": "route-chest", "query": "怎么去宝箱层", "expected_entities": ["route:chest"], "expected_sources": ["wiki.gg:route/chest"]},
+    {"id": "route-dark-room", "query": "去暗室", "expected_entities": ["route:dark-room"], "expected_sources": ["wiki.gg:route/dark-room"]},
+    {"id": "route-mother", "query": "母亲线", "expected_entities": ["route:mother"], "expected_sources": ["wiki.gg:route/mother"]},
+    {"id": "route-semantic", "query": "收集两块刀片后怎样打开通往尸宫的门", "filters": {"entity_types": ["route"]}, "expected_entities": ["route:mother"], "expected_sources": ["wiki.gg:route/mother"]},
+    {"id": "route-beast", "query": "怎么去祸兽", "expected_entities": ["route:beast"], "expected_sources": ["wiki.gg:route/beast"]},
+    {"id": "route-mega-satan", "query": "钥匙碎片路线", "expected_entities": ["route:mega-satan"], "expected_sources": ["wiki.gg:route/mega-satan"]},
+    {"id": "room-devil", "query": "恶魔交易", "expected_entities": ["room:14"], "expected_sources": ["wiki.gg:room/devil"]},
+    {"id": "room-angel", "query": "白房", "expected_entities": ["room:15"], "expected_sources": ["wiki.gg:room/angel"]},
+    {"id": "no-answer-unknown-item", "query": "collectible:999999", "expected_entities": [], "expected_sources": [], "expect_no_answer": true},
+    {"id": "no-answer-modded", "query": "Fiend Folio 的某个模组道具", "expected_entities": [], "expected_sources": [], "expect_no_answer": true},
+    {"id": "version-mismatch", "query": "硫磺火", "filters": {"game_version": "Repentance 1.7.9"}, "expected_entities": [], "expected_sources": [], "expect_no_answer": true}
+  ]
+}

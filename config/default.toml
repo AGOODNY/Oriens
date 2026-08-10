@@ -4,6 +4,21 @@ poll_interval_ms = 100
 recent_event_limit = 8
 knowledge_path = "data/knowledge/items.zh-CN.json"
 
+[rag]
+source_path = "data/knowledge/rag-v1/documents.json"
+chunks_path = "data/knowledge/rag-v1/chunks.jsonl"
+manifest_path = "data/knowledge/rag-v1/manifest.json"
+index_path = "data/indexes/rag-v1.sqlite"
+eval_path = "data/eval/rag-v1.json"
+game_version = "Repentance+ 1.9.7.17.J460"
+vector_enabled = true
+vector_model_id = "BAAI/bge-m3"
+vector_model_path = "data/models/bge-m3"
+vector_dimension = 1024
+vector_min_similarity = 0.52
+vector_query_timeout_seconds = 8.0
+retrieval_top_k = 5
+
 [providers.qwen]
 region = "cn-beijing"
 base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"

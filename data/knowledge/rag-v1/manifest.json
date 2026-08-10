@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "corpus_id": "oriens-core-rag-zh-en-v1",
+  "content_version": "1.0.0",
+  "game_version": "Repentance+ 1.9.7.17.J460",
+  "curated_on": "2026-08-10",
+  "document_count": 37,
+  "chunk_count": 37,
+  "corpus_checksum": "sha256:efa298df6be64869dde485f1877a08781548ec813f4cde2d5782769ee128bbcb",
+  "source_file": "documents.json",
+  "scope": {
+    "included": [
+      "核心道具",
+      "常见协同与冲突",
+      "主要角色机制",
+      "常用路线",
+      "常见房间"
+    ],
+    "excluded": [
+      "完整 Wiki 镜像",
+      "Modded 内容",
+      "语音",
+      "视觉",
+      "长期记忆",
+      "联网搜索语料"
+    ]
+  }
+}

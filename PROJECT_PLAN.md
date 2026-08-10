@@ -1,8 +1,8 @@
 # Oriens: Your In-Game Guide — 项目计划
 
 > 文档状态：架构基线 v1.0  
-> 更新日期：2026-08-07  
-> 当前阶段：等待项目初始化  
+> 更新日期：2026-08-10
+> 当前阶段：阶段 2 已完成并验收
 > 目标平台：Windows + Steam《The Binding of Isaac: Repentance+》  
 > 项目形态：以撒 Lua Mod + Python/PySide6 桌面伴侣
 
@@ -560,6 +560,11 @@ OriensYourIn-GameGuide/
 - 为典型问题创建检索评测集。
 
 验收：核心道具、协同、角色和路线问题的证据召回达到可用水平，回答不依赖联网搜索。
+
+2026-08-10 实施结果：37 份可追溯短文档、26 条固定评测、SQLite FTS5/BM25、
+本地 BGE-M3 与 `sqlite-vec` 已接入统一 `RagService`。关键词基线 Recall@5/MRR
+为 0.923，混合评测 Recall@5/MRR 为 1.0，无答案准确率为 1.0；向量 Worker
+独立运行并保留关键词降级。36 项自动化测试及 2776 条阶段 0 事件回放通过。
 
 ### 阶段3：语音闭环
 

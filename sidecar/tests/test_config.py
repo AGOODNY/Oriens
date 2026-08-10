@@ -34,6 +34,15 @@ class ConfigTests(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True):
                 self.assertIsNone(load_api_key("TEST_ORIENS_SECRET", missing))
 
+    def test_rag_backend_and_model_are_configuration_only(self) -> None:
+        config = load_config()
+        self.assertTrue(config.rag.vector_model_id)
+        self.assertEqual(config.rag.vector_model_path.name, "bge-m3")
+        self.assertEqual(config.rag.vector_dimension, 1024)
+        self.assertEqual(config.rag.vector_min_similarity, 0.52)
+        self.assertTrue(config.rag.source_path.is_file())
+        self.assertTrue(config.rag.eval_path.is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
