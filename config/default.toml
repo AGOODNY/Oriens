@@ -1,0 +1,24 @@
+[app]
+language = "zh-CN"
+poll_interval_ms = 100
+recent_event_limit = 8
+knowledge_path = "data/knowledge/items.zh-CN.json"
+
+[providers.qwen]
+region = "cn-beijing"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+api_key_env = "DASHSCOPE_API_KEY"
+timeout_seconds = 8.0
+max_retries = 1
+
+[model_roles.advice]
+provider = "qwen"
+model_id = "qwen3.7-flash"
+display_name = "千问 3.7 Flash"
+input_price_per_million_cny = 0.2
+output_price_per_million_cny = 0.8
+pricing_input_limit_tokens = 32768
+pricing_checked_on = "2026-08-10"
+
+[budget]
+run_limit_cny = 0.20

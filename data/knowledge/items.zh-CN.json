@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "game": "The Binding of Isaac: Repentance+",
+  "curated_on": "2026-08-10",
+  "items": [
+    {
+      "collectible_id": 1,
+      "name_zh": "悲伤洋葱",
+      "name_en": "The Sad Onion",
+      "facts": ["提高射速，适合需要稳定提升输出频率的局面。"],
+      "advice_hint": "通常值得拿；它提供直接、稳定且容易发挥的射速收益。",
+      "sources": [
+        {
+          "id": "wiki.gg:item/sad-onion",
+          "title": "The Sad Onion - The Binding of Isaac: Rebirth Wiki",
+          "url": "https://bindingofisaacrebirth.wiki.gg/wiki/The_Sad_Onion"
+        }
+      ]
+    },
+    {
+      "collectible_id": 3,
+      "name_zh": "弯勺魔术",
+      "name_en": "Spoon Bender",
+      "facts": ["让角色的眼泪获得追踪能力，可提高移动目标上的命中稳定性。"],
+      "advice_hint": "通常值得拿；追踪效果能减少空枪，对弹道较难控制的构筑尤其友好。",
+      "sources": [
+        {
+          "id": "wiki.gg:item/spoon-bender",
+          "title": "Spoon Bender - The Binding of Isaac: Rebirth Wiki",
+          "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Spoon_Bender"
+        }
+      ]
+    },
+    {
+      "collectible_id": 4,
+      "name_zh": "柯里吉的头",
+      "name_en": "Cricket's Head",
+      "facts": ["提供显著伤害提升，并改变伤害倍率计算。"],
+      "advice_hint": "高优先级拾取；它通常能明显提升当前构筑的直接伤害。",
+      "sources": [
+        {
+          "id": "wiki.gg:item/crickets-head",
+          "title": "Cricket's Head - The Binding of Isaac: Rebirth Wiki",
+          "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Cricket%27s_Head"
+        }
+      ]
+    },
+    {
+      "collectible_id": 12,
+      "name_zh": "魔法蘑菇",
+      "name_en": "Magic Mushroom",
+      "facts": ["同时提高伤害、移速、射程与生命上限，是覆盖面很广的综合强化。"],
+      "advice_hint": "高优先级拾取；综合属性提升大，绝大多数构筑都能直接受益。",
+      "sources": [
+        {
+          "id": "wiki.gg:item/magic-mushroom",
+          "title": "Magic Mushroom - The Binding of Isaac: Rebirth Wiki",
+          "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Magic_Mushroom"
+        }
+      ]
+    },
+    {
+      "collectible_id": 350,
+      "name_zh": "剧毒休克",
+      "name_en": "Toxic Shock",
+      "facts": ["进入新房间时使敌人中毒，伤害与角色当前伤害相关。"],
+      "advice_hint": "通常值得拿；清理普通房间时能提供免费的开场群体伤害。",
+      "sources": [
+        {
+          "id": "wiki.gg:item/toxic-shock",
+          "title": "Toxic Shock - The Binding of Isaac: Rebirth Wiki",
+          "url": "https://bindingofisaacrebirth.wiki.gg/wiki/Toxic_Shock"
+        }
+      ]
+    }
+  ]
+}

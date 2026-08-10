@@ -24,9 +24,11 @@ data/*.db
 data/*.sqlite*
 config/local.toml
 
+# 本地测试与报告临时产物
+data/test-output/
+
 # 编辑器与系统文件
 .idea/
 .vscode/
 .DS_Store
 Thumbs.db
-

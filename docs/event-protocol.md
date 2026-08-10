@@ -35,10 +35,13 @@
 
 `heartbeat` 默认每 60 游戏帧输出；完整 `state_snapshot` 默认每 300 游戏帧以及开局、进房和换层时输出。生命/资源检查每 6 游戏帧进行一次，只在指纹变化时输出事件。
 
+## 阶段 1 消费方式
+
+阶段 1 不修改协议版本。桌面端在 `room_type=4` 的 `collectible_spawned` 事件中读取 `payload.collectible_id`，并用 `run_id`、`seq`、`room_index` 和 `room_spawn_seed` 形成建议状态令牌。心跳可以继续推进事件序号；如果局 ID 或房间标识变化，未完成的建议立即取消，稍后到达的回复视为过期且禁止展示。
+
 ## 顺序与恢复规则
 
 - Python 按 `run_id + seq` 判定重复和倒序；重复或倒序事件不进入状态。
 - 发现序号缺口时仍应用后续事件，同时累计 `sequence_gaps`。
 - `state_snapshot` 可在日志截断、sidecar 晚启动或遗漏差异事件后重新建立完整玩家状态。
 - 日志文件被截断或替换时，监听器会重新打开并从新文件开头继续。
-

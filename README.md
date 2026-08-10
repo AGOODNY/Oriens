@@ -1,15 +1,16 @@
 # Oriens: Your In-Game Guide
 
-Oriens 是《以撒的结合：忏悔+》的陪伴型游戏助手。本仓库目前只实现项目计划中的“阶段 0：技术探针”，用于验证以下链路：
+Oriens 是《以撒的结合：忏悔+》的陪伴型游戏助手。仓库当前完成到“阶段 1：无语音垂直切片”，验证以下闭环：
 
 ```text
 Repentance+ Lua Mod
   -> [ORIENS_EVENT] 单行 JSON 日志
-  -> Python 日志监听器
-  -> 事件校验、状态重建、录制与离线回放
+  -> Python 日志监听、状态重建与本地道具资料
+  -> 模拟模型或 Qwen 结构化短建议
+  -> PySide6 悬浮窗显示来源、置信度和估算费用
 ```
 
-阶段 0 不包含 UI、语音、RAG、截图或任何付费模型调用。
+阶段 1 不包含语音、截图、长期记忆、向量检索或完整 Wiki。在线模型默认关闭，自动化测试不会产生 API 费用。
 
 ## 已确认的本机环境
 
@@ -31,9 +32,36 @@ powershell -ExecutionPolicy Bypass -File .\tools\install_mod.ps1
 
 脚本默认安装到本机已确认的游戏目录。如果目标 `mods\oriens` 已存在，脚本会停止，不会静默覆盖；确认是本项目旧版本后可显式加 `-Force`。
 
-## 运行监听器
+## 安装桌面端依赖
 
-无需安装第三方依赖：
+使用项目内虚拟环境，避免安装全局软件：
+
+```powershell
+D:\python\python.exe -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+```
+
+## 运行悬浮窗
+
+默认零费用离线模拟模式：
+
+```powershell
+.\.venv\Scripts\oriens.exe ui
+```
+
+程序从游戏日志末尾开始监听。缺少 `.env` 或 `DASHSCOPE_API_KEY` 时仍会正常启动，并在悬浮窗中显示简体中文离线提示。阶段 1 固定覆盖道具 ID `1`、`3`、`4`、`12`、`350`。
+
+如需显式启用百炼：
+
+```powershell
+.\.venv\Scripts\oriens.exe ui --online
+```
+
+模型名称、北京地域端点、超时、重试、单价与本局预算上限位于 `config/default.toml`。真实密钥只放在被 Git 忽略的 `.env` 中，格式参考 `.env.example`。不要把密钥写入命令行参数、配置或日志。
+
+## 阶段 0 监听与回放工具
+
+这部分仍可直接使用 Python 3.11，无需启动 UI：
 
 ```powershell
 $env:PYTHONPATH = "$PWD\sidecar\src"
@@ -55,7 +83,16 @@ D:\python\python.exe -m oriens.cli replay data\recordings\live.jsonl
 ```powershell
 $env:PYTHONPATH = "$PWD\sidecar\src"
 D:\python\python.exe -m unittest discover -s sidecar\tests -v
+D:\python\python.exe -m oriens.cli advice-demo 350
 ```
+
+真实 API 烟雾测试不是常规测试。只有用户确认费用后才执行：
+
+```powershell
+D:\python\python.exe -m oriens.cli api-smoke 350 --confirm-charge
+```
+
+它最多发起一项短建议任务；在当前配置下通常低于 ¥0.001，实际账单以百炼为准。
 
 ## 阶段 0 验收
 
@@ -69,3 +106,4 @@ D:\python\python.exe -m unittest discover -s sidecar\tests -v
 
 事件协议见 [docs/event-protocol.md](docs/event-protocol.md)，覆盖范围与待验证项见 [docs/game-state-coverage.md](docs/game-state-coverage.md)。
 
+阶段 1 的[百炼配置依据](docs/qwen-provider.md)与[验收记录](docs/phase1-acceptance.md)单独维护。

@@ -30,6 +30,7 @@ class GameState:
     game_frame: int = 0
     context: dict[str, Any] = field(default_factory=dict)
     players: dict[str, dict[str, Any]] = field(default_factory=dict)
+    room_collectibles: list[dict[str, Any]] = field(default_factory=list)
     last_event_type: str | None = None
     bridge_version: str | None = None
 
@@ -74,7 +75,18 @@ class StateStore:
             state.game_frame = 0
             state.context = {}
             state.players = {}
+            state.room_collectibles = []
 
+        previous_room = (
+            state.context.get("room_index"),
+            state.context.get("room_spawn_seed"),
+        )
+        incoming_room = (
+            event.context.get("room_index"),
+            event.context.get("room_spawn_seed"),
+        )
+        if incoming_room != previous_room:
+            state.room_collectibles = []
         state.last_seq = event.seq
         state.game_frame = event.game_frame
         state.context = dict(event.context)
@@ -89,6 +101,10 @@ class StateStore:
             self._merge_players(event.payload.get("players"))
         elif event.type in {"player_state_changed", "inventory_changed"}:
             self._merge_player(event.payload.get("player"))
+        elif event.type == "collectible_spawned":
+            self._merge_room_collectible(event.payload)
+        elif event.type == "collectible_taken":
+            self._mark_collectible_taken(event.payload)
 
         return state
 
@@ -116,3 +132,25 @@ class StateStore:
         merged.update(player)
         self.state.players[key] = merged
 
+    def _merge_room_collectible(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        collectible_id = payload.get("collectible_id")
+        if type(collectible_id) is not int or collectible_id < 1:
+            return
+        init_seed = payload.get("init_seed")
+        for existing in self.state.room_collectibles:
+            if init_seed is not None and existing.get("init_seed") == init_seed:
+                existing.update(payload)
+                return
+        item = dict(payload)
+        item["taken"] = False
+        self.state.room_collectibles.append(item)
+
+    def _mark_collectible_taken(self, payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        collectible_id = payload.get("collectible_id")
+        for existing in self.state.room_collectibles:
+            if existing.get("collectible_id") == collectible_id:
+                existing["taken"] = True

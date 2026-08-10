@@ -48,7 +48,30 @@ class StateStoreTests(unittest.TestCase):
             store.apply(event(2, "heartbeat"))
         self.assertEqual(store.diagnostics.out_of_order_events, 1)
 
+    def test_tracks_collectibles_in_current_room(self) -> None:
+        store = StateStore()
+        spawned = event(
+            1,
+            "collectible_spawned",
+            {"collectible_id": 350, "init_seed": 99, "price": 0},
+        )
+        store.apply(spawned)
+        self.assertEqual(store.state.room_collectibles[0]["collectible_id"], 350)
+        store.apply(event(2, "collectible_taken", {"collectible_id": 350}))
+        self.assertTrue(store.state.room_collectibles[0]["taken"])
+
+        moved = GameEvent(
+            schema_version=1,
+            seq=3,
+            run_id="AAAA BBBB:0",
+            type="room_entered",
+            game_frame=30,
+            context={"stage": 1, "room_index": 1, "room_spawn_seed": 22},
+            payload={},
+        )
+        store.apply(moved)
+        self.assertEqual(store.state.room_collectibles, [])
+
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oriens.local/schemas/model-advice-v1.schema.json",
+  "title": "Oriens 模型建议草稿 v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["advice", "reason", "confidence", "sources", "state_seq"],
+  "properties": {
+    "advice": {"type": "string", "minLength": 1, "maxLength": 160},
+    "reason": {"type": "string", "minLength": 1, "maxLength": 240},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "state_seq": {"type": "integer", "minimum": 1}
+  }
+}
