@@ -25,6 +25,7 @@ data/screenshots/
 data/audio/
 data/indexes/
 data/models/
+data/raw/
 data/*.db
 data/*.sqlite*
 config/local.toml
