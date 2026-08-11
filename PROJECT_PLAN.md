@@ -575,7 +575,8 @@ OriensYourIn-GameGuide/
 
 未关闭项：模板静态依赖的 `Data:Item.tabx`、`Data:Entity.tabx`、`Data:Rooms`
 和部分 `ROOM_STB` 未包含在现有快照中，无法验收完整英文物品/饰品名称和具体房间
-布局。禁止重新抓站；需用户提供同一授权范围的 `Data:` 当前修订 JSONL 并完成人工
+布局。管理员已允许用户手工进行 API 补采；需按 `docs/huiji-data-supplement.md`
+生成独立的 `Data:` 当前修订 JSONL，完成离线验收和人工
 许可核对。该项完成前默认配置继续指向 37 分块 `rag-v1`，`rag-v2-faiss.toml`
 用于本机显式启用。
 
