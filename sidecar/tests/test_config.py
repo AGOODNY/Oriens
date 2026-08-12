@@ -54,6 +54,22 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(sqlite_config.rag.vector_min_similarity, 0.58)
         self.assertEqual(sqlite_config.rag.vector_max_sequence_length, 256)
 
+    def test_rag_v21_uses_independent_data_corpus_and_indexes(self) -> None:
+        sqlite_config = load_config(Path("config/rag-v2.1.toml"))
+        faiss_config = load_config(Path("config/rag-v2.1-faiss.toml"))
+        self.assertEqual(
+            sqlite_config.rag.content_version,
+            "rag-v2.1-huiji-data-2026-08-11",
+        )
+        self.assertEqual(sqlite_config.rag.raw_paths, faiss_config.rag.raw_paths)
+        self.assertEqual(len(sqlite_config.rag.raw_paths), 3)
+        self.assertEqual(sqlite_config.rag.vector_backend, "sqlite-vec")
+        self.assertEqual(faiss_config.rag.vector_backend, "faiss")
+        self.assertNotEqual(sqlite_config.rag.index_path, faiss_config.rag.index_path)
+        self.assertIn("rag-v2.1", str(sqlite_config.rag.chunks_path))
+        self.assertEqual(sqlite_config.rag.vector_device, "cuda")
+        self.assertEqual(sqlite_config.rag.vector_build_timeout_seconds, 86400)
+
 
 if __name__ == "__main__":
     unittest.main()

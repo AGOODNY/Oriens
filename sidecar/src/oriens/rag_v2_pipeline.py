@@ -27,10 +27,12 @@ from .rag_pipeline import CorpusValidationError
 SCHEMA_VERSION = 2
 DEFAULT_CONTENT_VERSION = "rag-v2-huiji-2026-08-10"
 DEFAULT_GAME_VERSION = "Repentance+ 1.9.7.17.J460"
+DATA_NAMESPACE = 3500
 
 _REQUIRED_RAW_FIELDS = {
     "authorization_ref",
     "content_checksum",
+    "content_model",
     "document_id",
     "license_note",
     "namespace",
@@ -38,6 +40,7 @@ _REQUIRED_RAW_FIELDS = {
     "redirect",
     "retrieved_at",
     "revision_id",
+    "revision_sha1",
     "revision_timestamp",
     "revision_url",
     "source_title",
@@ -167,6 +170,9 @@ class RagV2BuildReport:
     elapsed_seconds: float
     peak_working_set_bytes: int | None
     corpus_checksum: str
+    data_document_count: int = 0
+    data_chunk_count: int = 0
+    room_layout_count: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -185,6 +191,9 @@ class RagV2BuildReport:
             "elapsed_seconds": self.elapsed_seconds,
             "peak_working_set_bytes": self.peak_working_set_bytes,
             "corpus_checksum": self.corpus_checksum,
+            "data_document_count": self.data_document_count,
+            "data_chunk_count": self.data_chunk_count,
+            "room_layout_count": self.room_layout_count,
         }
 
 
@@ -260,16 +269,22 @@ def build_full_corpus(
         corpus_checksum = "sha256:" + _file_sha256(chunk_temp)
         peak_rss = _working_set_bytes()
         elapsed = time.perf_counter() - started
+        corpus_id = (
+            "oriens-rag-v2.1-huiji-data-complete"
+            if counters[f"namespace_{DATA_NAMESPACE}"]
+            else "oriens-rag-v2-huiji-complete"
+        )
         manifest = {
             "schema_version": SCHEMA_VERSION,
-            "corpus_id": "oriens-rag-v2-huiji-complete",
+            "corpus_id": corpus_id,
             "content_version": content_version,
             "game_version": game_version,
-            "source_snapshot": "huijiwiki-isaac-2026-08-10",
+            "source_snapshots": [path.parent.name for path in paths.raw_paths],
             "raw_record_count": counters["raw_records"],
             "raw_page_count": counters["namespace_0"],
             "raw_template_count": counters["namespace_10"],
             "raw_module_count": counters["namespace_828"],
+            "raw_data_count": counters[f"namespace_{DATA_NAMESPACE}"],
             "document_count": build_stats["documents"],
             "chunk_count": build_stats["chunks"],
             "entity_count": build_stats["entities"],
@@ -281,6 +296,10 @@ def build_full_corpus(
             "near_duplicates": build_stats["near_duplicates"],
             "skipped_noise_pages": build_stats["skipped_noise_pages"],
             "lua_static_fact_count": lua_fact_count,
+            "data_document_count": build_stats["data_documents"],
+            "data_chunk_count": build_stats["data_chunks"],
+            "room_layout_count": build_stats["room_layouts"],
+            "skipped_data_pages": build_stats["skipped_data_pages"],
             "corpus_checksum": corpus_checksum,
             "license_note": (
                 "以撒中文 Wiki 原创内容按 CC BY-NC-SA 3.0 及管理员书面授权处理；"
@@ -313,6 +332,9 @@ def build_full_corpus(
             round(elapsed, 3),
             peak_rss,
             corpus_checksum,
+            build_stats["data_documents"],
+            build_stats["data_chunks"],
+            build_stats["room_layouts"],
         )
     finally:
         db.close()
@@ -349,6 +371,7 @@ def _create_catalog(db: sqlite3.Connection) -> None:
             license_note TEXT NOT NULL,
             authorization_ref TEXT NOT NULL,
             stale INTEGER NOT NULL
+            ,content_model TEXT NOT NULL
         );
         CREATE TABLE redirect_resolution(
             source_key TEXT PRIMARY KEY,
@@ -407,7 +430,7 @@ def _catalog_raw_pages(
     modules: Counter[str] = Counter()
     seen_page_revisions: set[tuple[int, int]] = set()
     lua_fact_count = 0
-    insert = "INSERT INTO pages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    insert = "INSERT INTO pages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
     for raw_path in raw_paths:
         with raw_path.open("r", encoding="utf-8") as source:
             for line_number, line in enumerate(source, start=1):
@@ -452,16 +475,18 @@ def _catalog_raw_pages(
                         record["license_note"],
                         record["authorization_ref"],
                         int(record["stale"]),
+                        record["content_model"],
                     ),
                 )
                 counters["raw_records"] += 1
                 counters[f"namespace_{record['namespace']}"] += 1
                 if record["redirect"]:
                     counters["redirects"] += 1
-                for template in _template_dependencies(record["wikitext"]):
-                    templates[template] += 1
-                for module in _module_dependencies(record["wikitext"]):
-                    modules[module] += 1
+                if record["namespace"] in {0, 10, 828}:
+                    for template in _template_dependencies(record["wikitext"]):
+                        templates[template] += 1
+                    for module in _module_dependencies(record["wikitext"]):
+                        modules[module] += 1
                 if record["namespace"] == 828 and record["title"] in _STATIC_LUA_MODULES:
                     facts = _extract_lua_literals(record["wikitext"])
                     for fact_key, fact_value in facts:
@@ -496,12 +521,16 @@ def _validate_raw_record(record: Any, path: Path, line_number: int) -> None:
         raise CorpusValidationError(f"{path.name}:{line_number} schema_version 无效")
     if type(record["page_id"]) is not int or type(record["revision_id"]) is not int:
         raise CorpusValidationError(f"{path.name}:{line_number} 页面/修订 ID 无效")
-    if type(record["namespace"]) is not int or record["namespace"] not in {0, 10, 828}:
+    if type(record["namespace"]) is not int or record["namespace"] not in {
+        0, 10, 828, DATA_NAMESPACE
+    }:
         raise CorpusValidationError(f"{path.name}:{line_number} 命名空间不在允许范围")
     if type(record["redirect"]) is not bool or type(record["stale"]) is not bool:
         raise CorpusValidationError(f"{path.name}:{line_number} 布尔字段无效")
     if not isinstance(record["wikitext"], str):
         raise CorpusValidationError(f"{path.name}:{line_number} wikitext 无效")
+    if not isinstance(record["content_model"], str) or not record["content_model"]:
+        raise CorpusValidationError(f"{path.name}:{line_number} content_model 无效")
     expected = "sha256:" + sha256(record["wikitext"].encode("utf-8")).hexdigest()
     if record["content_checksum"] != expected:
         raise CorpusValidationError(f"{path.name}:{line_number} 正文校验和不匹配")
@@ -688,6 +717,14 @@ def _write_chunks_and_entities(
                 notify(
                     f"已规范化 {page_number} 个正文页面，生成 {stats['chunks']} 个分块"
                 )
+        _write_data_chunks(
+            db,
+            target,
+            content_version,
+            game_version,
+            stats,
+            notify,
+        )
         db.commit()
     with entities_path.open("w", encoding="utf-8", newline="\n") as target:
         for row in db.execute("SELECT * FROM entities ORDER BY entity_type, entity_id"):
@@ -697,6 +734,442 @@ def _write_chunks_and_entities(
             target.write(json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n")
             stats["entities"] += 1
     return stats
+
+
+def _write_data_chunks(
+    db: sqlite3.Connection,
+    target: TextIO,
+    content_version: str,
+    game_version: str,
+    stats: Counter[str],
+    notify: callable,
+) -> None:
+    """将白名单 Data 表和 ROOM_STB 静态转换为可追溯分块。"""
+
+    item_page = db.execute(
+        "SELECT * FROM pages WHERE namespace=? AND title='Data:Item.tabx'",
+        (DATA_NAMESPACE,),
+    ).fetchone()
+    keyword_page = db.execute(
+        "SELECT * FROM pages WHERE namespace=? AND title='Data:ItemKeywords.tabx'",
+        (DATA_NAMESPACE,),
+    ).fetchone()
+    if item_page is not None:
+        keyword_rows = (
+            {str(row.get("page")): row for row in _tabular_rows(keyword_page["wikitext"])}
+            if keyword_page is not None
+            else {}
+        )
+        item_rows = _tabular_rows(item_page["wikitext"])
+        for ordinal, item in enumerate(item_rows, start=1):
+            page_key = str(item.get("page") or "").strip()
+            entity_type, entity_id = _item_entity_identity(page_key, item)
+            keyword = keyword_rows.get(page_key, {})
+            aliases = _data_item_aliases(page_key, item, keyword)
+            name_zh = _clean_scalar(item.get("namezh")) or page_key
+            name_en = _clean_scalar(item.get("nameen")) or name_zh
+            text = _data_item_text(item, entity_type, entity_id)
+            entity = {
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "name_zh": name_zh,
+                "name_en": name_en,
+                "aliases": aliases,
+            }
+            document_id = f"huiji:data:{item_page['page_id']}:row:{page_key}"
+            if _write_structured_chunk(
+                db,
+                target,
+                item_page,
+                entity,
+                document_id,
+                f"{item_page['title']} · {name_zh}",
+                text,
+                "wiki-data-tabular-row",
+                content_version,
+                game_version,
+                {"data_row": ordinal, "data_page_key": page_key},
+                stats,
+            ):
+                _merge_entity(db, entity, document_id, prefer_names=True)
+                stats["data_documents"] += 1
+
+    entity_page = db.execute(
+        "SELECT * FROM pages WHERE namespace=? AND title='Data:Entity.tabx'",
+        (DATA_NAMESPACE,),
+    ).fetchone()
+    if entity_page is not None:
+        entity_rows = _tabular_rows(entity_page["wikitext"])
+        identities = Counter(_game_entity_key(row) for row in entity_rows)
+        for ordinal, row in enumerate(entity_rows, start=1):
+            identity = _game_entity_key(row)
+            entity_id = "game-entity:" + identity
+            name_zh = _clean_scalar(row.get("namezh"))
+            name_en = _clean_scalar(row.get("nameen"))
+            fallback = name_zh or name_en or identity
+            entity = {
+                "entity_type": "game_entity",
+                "entity_id": entity_id,
+                "name_zh": name_zh or fallback,
+                "name_en": name_en or fallback,
+                "aliases": _unique_aliases(
+                    [identity, _clean_scalar(row.get("page")), name_zh, name_en]
+                ),
+            }
+            document_id = f"huiji:data:{entity_page['page_id']}:row:{ordinal:04d}"
+            conflict = identities[identity] > 1
+            if _write_structured_chunk(
+                db,
+                target,
+                entity_page,
+                entity,
+                document_id,
+                f"{entity_page['title']} · {fallback}",
+                _data_entity_text(row, identity, conflict),
+                "wiki-data-tabular-row",
+                content_version,
+                game_version,
+                {
+                    "data_row": ordinal,
+                    "source_conflict": conflict,
+                    "conflict_key": identity if conflict else None,
+                },
+                stats,
+            ):
+                _merge_entity(db, entity, document_id, prefer_names=True)
+                stats["data_documents"] += 1
+
+    room_rows = db.execute(
+        "SELECT * FROM pages WHERE namespace=? AND title LIKE 'Data:Rooms/%' "
+        "ORDER BY title_key",
+        (DATA_NAMESPACE,),
+    )
+    for ordinal, row in enumerate(room_rows, start=1):
+        try:
+            room = json.loads(row["wikitext"])
+        except json.JSONDecodeError as exc:
+            raise CorpusValidationError(f"{row['title']} ROOM_STB JSON 无效") from exc
+        if not isinstance(room, dict) or room.get("_type") != "ROOM_STB":
+            stats["skipped_data_pages"] += 1
+            continue
+        identity = _room_identity(room)
+        name = _clean_scalar(room.get("name")) or f"房间布局 {identity}"
+        entity = {
+            "entity_type": "room_layout",
+            "entity_id": "room-layout:" + sha256(identity.encode("utf-8")).hexdigest()[:20],
+            "name_zh": name,
+            "name_en": name,
+            "aliases": _room_aliases(room, identity),
+        }
+        document_id = f"huiji:data:page:{row['page_id']}"
+        if _write_structured_chunk(
+            db,
+            target,
+            row,
+            entity,
+            document_id,
+            f"{row['title']} · 结构化房间布局",
+            _room_text(room, identity),
+            "wiki-data-room-stb",
+            content_version,
+            game_version,
+            {
+                "room_file": room.get("_file"),
+                "room_type": room.get("type"),
+                "room_variant": room.get("variant"),
+                "room_subtype": room.get("subtype"),
+                "room_shape": room.get("shape"),
+            },
+            stats,
+        ):
+            _merge_entity(db, entity, document_id, prefer_names=True)
+            stats["data_documents"] += 1
+            stats["room_layouts"] += 1
+        if ordinal % 1000 == 0:
+            db.commit()
+            notify(
+                f"已静态转换 {ordinal} 个房间页面，Data 分块 {stats['data_chunks']} 个"
+            )
+
+    data_total = db.execute(
+        "SELECT count(*) FROM pages WHERE namespace=?", (DATA_NAMESPACE,)
+    ).fetchone()[0]
+    # 这里按原始 Data 页面计数；表格行不是独立页面，因此只把实际白名单页面计入。
+    recognized_pages = stats["room_layouts"] + int(item_page is not None) + int(
+        keyword_page is not None
+    ) + int(entity_page is not None)
+    stats["skipped_data_pages"] += max(0, data_total - recognized_pages)
+    notify(
+        f"Data 静态接入完成：{stats['data_chunks']} 个分块，"
+        f"其中 {stats['room_layouts']} 个房间布局；跳过 {stats['skipped_data_pages']} 个噪声/非白名单页面"
+    )
+
+
+def _write_structured_chunk(
+    db: sqlite3.Connection,
+    target: TextIO,
+    row: sqlite3.Row,
+    entity: dict[str, Any],
+    document_id: str,
+    title: str,
+    text: str,
+    material_type: str,
+    content_version: str,
+    game_version: str,
+    metadata: dict[str, Any],
+    stats: Counter[str],
+) -> bool:
+    normalized_text = _normalize_plain_text(text)
+    content_checksum = sha256(_dedupe_text(normalized_text).encode("utf-8")).hexdigest()
+    simhash = _simhash64(normalized_text)
+    # 结构化记录中的稳定 ID 是语义的一部分；布局相似不等于重复房间。
+    # 只拦截完全相同的内容，不对 Data 行和 ROOM_STB 应用近重复删除。
+    if db.execute(
+        "SELECT 1 FROM seen_content WHERE content_checksum=?", (content_checksum,)
+    ).fetchone():
+        stats["exact_duplicates"] += 1
+        return False
+    chunk_id = document_id + "#structured:01"
+    source = {
+        "id": row["raw_document_id"],
+        "title": row["source_title"],
+        "url": row["revision_url"],
+        "canonical_url": row["source_url"],
+        "type": row["source_type"],
+    }
+    chunk: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "chunk_id": chunk_id,
+        "document_id": document_id,
+        **entity,
+        "title": title,
+        "section_path": ["结构化数据"],
+        "text": normalized_text,
+        "source": source,
+        "source_material_type": material_type,
+        "page_id": row["page_id"],
+        "revision_id": row["revision_id"],
+        "revision_timestamp": row["revision_timestamp"],
+        "acquired_on": row["retrieved_at"][:10],
+        "retrieved_at": row["retrieved_at"],
+        "game_version": game_version,
+        "license_note": row["license_note"],
+        "authorization_ref": row["authorization_ref"],
+        "content_version": content_version,
+        "stale": bool(row["stale"]),
+        "raw_document_id": row["raw_document_id"],
+        "redirect_sources": [],
+        "normalization": "json-whitelist-static-v2.1",
+        **metadata,
+    }
+    canonical = json.dumps(
+        chunk, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    chunk["checksum"] = "sha256:" + sha256(canonical).hexdigest()
+    target.write(json.dumps(chunk, ensure_ascii=False, sort_keys=True) + "\n")
+    _remember_content(db, content_checksum, chunk_id, simhash, len(normalized_text))
+    stats["chunks"] += 1
+    stats["data_chunks"] += 1
+    stats["documents"] += 1
+    return True
+
+
+def _tabular_rows(value: str) -> list[dict[str, Any]]:
+    try:
+        table = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise CorpusValidationError("Data 表格不是有效 JSON") from exc
+    if not isinstance(table, dict) or not isinstance(table.get("schema"), dict):
+        raise CorpusValidationError("Data 表格缺少 schema")
+    fields_raw = table["schema"].get("fields")
+    data = table.get("data")
+    if not isinstance(fields_raw, list) or not isinstance(data, list):
+        raise CorpusValidationError("Data 表格 fields/data 无效")
+    fields = [
+        field.get("name") if isinstance(field, dict) else None for field in fields_raw
+    ]
+    if not fields or not all(isinstance(field, str) and field for field in fields):
+        raise CorpusValidationError("Data 表格字段名无效")
+    rows: list[dict[str, Any]] = []
+    for ordinal, values in enumerate(data, start=1):
+        if not isinstance(values, list) or len(values) != len(fields):
+            raise CorpusValidationError(f"Data 表格第 {ordinal} 行列数无效")
+        rows.append(dict(zip(fields, values)))
+    return rows
+
+
+def _item_entity_identity(
+    page_key: str, row: dict[str, Any]
+) -> tuple[str, str]:
+    match = re.fullmatch(r"([ctkp])(\d+)", page_key.casefold())
+    if not match:
+        raise CorpusValidationError(f"Data:Item.tabx 页面键无效：{page_key}")
+    prefix, raw_id = match.groups()
+    number = int(raw_id)
+    mapping = {
+        "c": ("item", "collectible"),
+        "t": ("trinket", "trinket"),
+        "k": ("card", "card"),
+        "p": ("pill", "pill"),
+    }
+    entity_type, id_prefix = mapping[prefix]
+    return entity_type, f"{id_prefix}:{number}"
+
+
+def _data_item_aliases(
+    page_key: str, item: dict[str, Any], keyword: dict[str, Any]
+) -> list[str]:
+    aliases: list[Any] = [
+        page_key,
+        item.get("namezh"),
+        item.get("nameen"),
+    ]
+    for field, separator in (
+        (item.get("namelist"), ";"),
+        (keyword.get("name_alias"), ";"),
+        (keyword.get("PinyinIndex"), ";"),
+    ):
+        if isinstance(field, str):
+            aliases.extend(field.split(separator))
+    return _unique_aliases(_clean_scalar(value) for value in aliases)
+
+
+def _data_item_text(
+    item: dict[str, Any], entity_type: str, entity_id: str
+) -> str:
+    labels = {
+        "item": "收藏品",
+        "trinket": "饰品",
+        "card": "卡牌或符文",
+        "pill": "胶囊",
+    }
+    parts = [
+        f"名称：{_clean_scalar(item.get('namezh')) or entity_id}",
+        f"英文名：{_clean_scalar(item.get('nameen')) or '未填写'}",
+        f"实体类型：{labels[entity_type]}",
+        f"稳定 ID：{entity_id}",
+    ]
+    field_labels = (
+        ("desczh", "中文短描述"),
+        ("descen", "英文短描述"),
+        ("effect", "机制效果"),
+        ("quality", "品质"),
+        ("charge", "充能"),
+        ("unlock", "解锁条件"),
+        ("tag", "机制标签"),
+        ("source", "游戏来源版本"),
+        ("subtype", "子类型"),
+    )
+    for field, label in field_labels:
+        value = _clean_scalar(item.get(field))
+        if value and value not in {"-2147483648", "-1"}:
+            parts.append(f"{label}：{value}")
+    return "；".join(parts) + "。"
+
+
+def _game_entity_key(row: dict[str, Any]) -> str:
+    values: list[int] = []
+    for field in ("type", "variant", "subtype"):
+        value = row.get(field)
+        if type(value) is not int:
+            raise CorpusValidationError(f"Data:Entity.tabx {field} 不是整数")
+        values.append(value)
+    return ".".join(str(value) for value in values)
+
+
+def _data_entity_text(
+    row: dict[str, Any], identity: str, conflict: bool
+) -> str:
+    parts = [
+        f"实体 ID：{identity}",
+        f"中文名：{_clean_scalar(row.get('namezh')) or '未填写'}",
+        f"英文名：{_clean_scalar(row.get('nameen')) or '未填写'}",
+    ]
+    for field, label in (
+        ("page", "关联页面"),
+        ("tag", "标签"),
+        ("tips", "机制提示"),
+        ("hp", "基础生命值"),
+        ("stagehp", "关卡生命值"),
+        ("shieldstrength", "护盾强度"),
+        ("collisionDamage", "碰撞伤害"),
+        ("source", "游戏来源版本"),
+    ):
+        value = _clean_scalar(row.get(field))
+        if value and value != "-1":
+            parts.append(f"{label}：{value}")
+    if conflict:
+        parts.append("源数据冲突：相同 type.variant.subtype 存在多个名称记录，均予保留")
+    return "；".join(parts) + "。"
+
+
+def _room_identity(room: dict[str, Any]) -> str:
+    fields = ("_file", "type", "variant", "subtype", "_i")
+    values = [_clean_scalar(room.get(field)) for field in fields]
+    if not all(values):
+        raise CorpusValidationError("ROOM_STB 缺少稳定身份字段")
+    return "/".join(values)
+
+
+def _room_aliases(room: dict[str, Any], identity: str) -> list[str]:
+    file_name = _clean_scalar(room.get("_file"))
+    values = [
+        identity,
+        _clean_scalar(room.get("name")),
+        f"{file_name} {room.get('_i')}",
+        f"room-layout {identity}",
+    ]
+    return _unique_aliases(values)
+
+
+def _room_text(room: dict[str, Any], identity: str) -> str:
+    doors = room.get("doors") if isinstance(room.get("doors"), list) else []
+    spawns = room.get("spawns") if isinstance(room.get("spawns"), list) else []
+    active_doors = [
+        f"({door.get('x')},{door.get('y')})"
+        for door in doors
+        if isinstance(door, dict) and door.get("exists") is True
+    ]
+    entity_counts: Counter[str] = Counter()
+    spawn_cells = 0
+    for spawn in spawns:
+        if not isinstance(spawn, dict):
+            continue
+        spawn_cells += 1
+        entities = spawn.get("entity")
+        if not isinstance(entities, list):
+            continue
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            key = ".".join(
+                str(entity.get(field, 0)) for field in ("type", "variant", "subtype")
+            )
+            entity_counts[key] += 1
+    entity_summary = "、".join(
+        f"{key}×{count}" for key, count in sorted(entity_counts.items())
+    ) or "无"
+    parts = [
+        f"房间布局 ID：{identity}",
+        f"STB 文件：{room.get('_file')}",
+        f"房间类型：{room.get('type')}",
+        f"变体：{room.get('variant')}，子类型：{room.get('subtype')}",
+        f"形状：{room.get('shape')}，尺寸：{room.get('width')}×{room.get('height')}",
+        f"难度：{room.get('difficulty')}，权重：{room.get('weight')}",
+        f"有效门：{'、'.join(active_doors) if active_doors else '无'}",
+        f"生成格数量：{spawn_cells}",
+        f"生成实体：{entity_summary}",
+    ]
+    name = _clean_scalar(room.get("name"))
+    if name:
+        parts.insert(1, f"房间名称：{name}")
+    return "；".join(parts) + "。"
+
+
+def _clean_scalar(value: Any) -> str:
+    if value is None or isinstance(value, (dict, list)):
+        return ""
+    return _normalize_plain_text(str(value))
 
 
 def normalize_wikitext_sections(
@@ -994,9 +1467,16 @@ def _redirect_sources(db: sqlite3.Connection, final_key: str) -> list[dict[str, 
     return [dict(row) for row in rows]
 
 
-def _merge_entity(db: sqlite3.Connection, entity: dict[str, Any], document_id: str) -> None:
+def _merge_entity(
+    db: sqlite3.Connection,
+    entity: dict[str, Any],
+    document_id: str,
+    *,
+    prefer_names: bool = False,
+) -> None:
     row = db.execute(
-        "SELECT aliases_json, document_ids_json FROM entities WHERE entity_id=?",
+        "SELECT name_zh, name_en, aliases_json, document_ids_json "
+        "FROM entities WHERE entity_id=?",
         (entity["entity_id"],),
     ).fetchone()
     if row is None:
@@ -1012,11 +1492,20 @@ def _merge_entity(db: sqlite3.Connection, entity: dict[str, Any], document_id: s
             ),
         )
         return
-    aliases = _unique_aliases([*json.loads(row[0]), *entity["aliases"]])
-    documents = sorted({*json.loads(row[1]), document_id})
+    aliases = _unique_aliases([*json.loads(row[2]), *entity["aliases"]])
+    documents = sorted({*json.loads(row[3]), document_id})
+    name_zh = entity["name_zh"] if prefer_names else row["name_zh"]
+    name_en = entity["name_en"] if prefer_names else row["name_en"]
     db.execute(
-        "UPDATE entities SET aliases_json=?, document_ids_json=? WHERE entity_id=?",
-        (json.dumps(aliases, ensure_ascii=False), json.dumps(documents), entity["entity_id"]),
+        "UPDATE entities SET name_zh=?, name_en=?, aliases_json=?, "
+        "document_ids_json=? WHERE entity_id=?",
+        (
+            name_zh,
+            name_en,
+            json.dumps(aliases, ensure_ascii=False),
+            json.dumps(documents),
+            entity["entity_id"],
+        ),
     )
 
 
@@ -1095,7 +1584,7 @@ def _dependency_audit(
     lua_fact_count: int,
 ) -> dict[str, Any]:
     titles = {row[0] for row in db.execute("SELECT title FROM pages")}
-    titles_casefold = {title.casefold() for title in titles}
+    titles_casefold = {_title_key(title).casefold() for title in titles}
     missing_templates = sorted(_REQUIRED_TEMPLATES - titles)
     missing_modules = sorted(_REQUIRED_MODULES - titles)
     unresolved_modules = sorted(
@@ -1115,7 +1604,7 @@ def _dependency_audit(
     missing_data_snapshots = sorted(
         dependency
         for dependency in data_dependencies
-        if dependency.casefold() not in titles_casefold
+        if not _data_dependency_present(dependency, titles_casefold)
     )
     return {
         "schema_version": 1,
@@ -1125,22 +1614,44 @@ def _dependency_audit(
         "required_modules_present": not missing_modules,
         "missing_required_templates": missing_templates,
         "missing_required_modules": missing_modules,
-        "template_invocations": dict(templates.most_common()),
-        "module_invocations": dict(modules.most_common()),
+        "template_invocations": _casefold_counter(templates),
+        "module_invocations": _casefold_counter(modules),
         "unresolved_invoked_modules": unresolved_modules,
         "data_dependencies": dict(data_dependencies.most_common()),
         "missing_data_snapshots": missing_data_snapshots,
-        "data_dependency_limitations": [
-            "Infobox item 与 ItemSummary 的双语名称和结构化字段依赖 Data:Item.tabx",
-            "EntityQuery 的完整实体字段依赖 Data:Entity.tabx",
-            "Rooms 的具体布局数据来自 Data:Rooms 与 ROOM_STB 数据库记录",
-        ],
+        "data_dependency_limitations": (
+            []
+            if not missing_data_snapshots
+            else ["部分静态 Data 依赖仍未包含在当前快照"]
+        ),
+        "data_namespace_present": counters[f"namespace_{DATA_NAMESPACE}"] > 0,
+        "data_records": counters[f"namespace_{DATA_NAMESPACE}"],
         "lua_static_fact_count": lua_fact_count,
         "lua_execution": False,
         "category_namespace_required": False,
         "category_namespace_reason": (
             "正文内分类标记足以进行首轮实体分类；当前未发现必须读取分类页正文的依赖"
         ),
+    }
+
+
+def _data_dependency_present(dependency: str, titles_casefold: set[str]) -> bool:
+    candidates = {_title_key(dependency).casefold()}
+    if not dependency.casefold().endswith((".tab", ".tabx", ".json")):
+        candidates.add(_title_key(dependency + ".tabx").casefold())
+    return bool(candidates & titles_casefold)
+
+
+def _casefold_counter(values: Counter[str]) -> dict[str, int]:
+    combined: dict[str, tuple[str, int]] = {}
+    for name, count in values.items():
+        key = name.casefold()
+        existing = combined.get(key)
+        display = min(name, existing[0], key=str.casefold) if existing else name
+        combined[key] = (display, count + (existing[1] if existing else 0))
+    return {
+        display: count
+        for display, count in sorted(combined.values(), key=lambda item: item[0].casefold())
     }
 
 

@@ -239,7 +239,9 @@ def _normalize_document(document: Any, defaults: dict[str, Any]) -> dict[str, An
 def _all_aliases(chunk: dict[str, Any]) -> list[str]:
     values = [chunk["name_zh"], chunk["name_en"], chunk["entity_id"], *chunk["aliases"]]
     suffix = chunk["entity_id"].rsplit(":", 1)[-1]
-    if suffix.isdigit():
+    # 游戏内裸数字通常指收藏品；饰品、卡牌和胶囊需使用类型化 ID，
+    # 避免 Data 表中跨类型复用数字造成确定性排序歧义。
+    if suffix.isdigit() and chunk["entity_type"] == "item":
         values.append(suffix)
     return list(dict.fromkeys(values))
 

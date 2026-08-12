@@ -190,6 +190,8 @@ def _make_vector_client(config: OriensConfig) -> VectorWorkerClient | None:
         dimension=config.rag.vector_dimension,
         batch_size=config.rag.vector_batch_size,
         max_sequence_length=config.rag.vector_max_sequence_length,
+        device=config.rag.vector_device,
+        build_timeout_seconds=config.rag.vector_build_timeout_seconds,
         request_timeout_seconds=config.rag.vector_query_timeout_seconds,
     )
 
@@ -306,7 +308,11 @@ def run_rag_build(args: argparse.Namespace) -> int:
                 config.rag.index_path,
                 corpus_metadata={
                     "content_version": config.rag.content_version,
-                    "corpus_id": "oriens-rag-v2-huiji-complete",
+                    "corpus_id": (
+                        "oriens-rag-v2.1-huiji-data-complete"
+                        if "v2.1" in config.rag.content_version
+                        else "oriens-rag-v2-huiji-complete"
+                    ),
                 },
             )
             chunks: object = config.rag.chunks_path

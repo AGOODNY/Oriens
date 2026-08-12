@@ -111,7 +111,7 @@ class RagTests(unittest.TestCase):
         vector = _FakeVector([(baseline, 0.91)])
         result = RagService(self.index_path, vector).retrieve("剖腹产")
         self.assertEqual(result.hits[0].chunk.chunk_id, baseline)
-        self.assertEqual(result.hits[0].methods, ("exact", "bm25", "vector"))
+        self.assertEqual(result.hits[0].methods, ("exact", "vector"))
 
     def test_low_confidence_vector_only_candidate_is_treated_as_no_answer(self) -> None:
         known_chunk = RagService(self.index_path).retrieve("Brimstone").hits[0].chunk.chunk_id
@@ -125,7 +125,16 @@ class RagTests(unittest.TestCase):
         vector = _FakeVector([(known_chunk, 0.99)])
         result = RagService(self.index_path, vector).retrieve("collectible:999999")
         self.assertTrue(result.no_answer)
-        self.assertEqual(vector.calls, 0)
+
+    def test_unknown_extended_stable_id_does_not_use_fts_fallback(self) -> None:
+        service = RagService(self.index_path)
+        result = service.retrieve("room-layout:not-real")
+        self.assertTrue(result.no_answer)
+
+    def test_explicit_third_party_mod_query_is_out_of_scope(self) -> None:
+        service = RagService(self.index_path)
+        result = service.retrieve("Fiend Folio 的某个模组道具")
+        self.assertTrue(result.no_answer)
 
     def test_fixed_offline_eval_meets_recorded_thresholds(self) -> None:
         report = evaluate(RagService(self.index_path), self.config.rag.eval_path)

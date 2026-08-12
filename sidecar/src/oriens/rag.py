@@ -190,6 +190,15 @@ class RagService:
             return RagResult(
                 query, (), 0.0, self._vector is None, "空查询", self._corpus_version()
             )
+        if _is_explicit_out_of_scope(text):
+            return RagResult(
+                text,
+                (),
+                round((time.perf_counter() - started) * 1000, 3),
+                self._vector is None or not self._vector.available,
+                "问题明确超出当前本地授权语料范围",
+                self._corpus_version(),
+            )
         active_filters = filters or RagFilters()
         candidates: dict[str, _Candidate] = {}
         with closing(self._connect()) as db:
@@ -200,9 +209,10 @@ class RagService:
                     candidate.scores["exact"] = max(
                         candidate.scores.get("exact", 0.0), quality
                     )
+            # 显式稳定 ID 只允许精确命中；不存在时不得拆词做模糊召回。
             fts_rows = (
                 []
-                if not exact_rows and _looks_like_exact_id(text)
+                if exact_rows or _looks_like_exact_id(text)
                 else self._fts_candidates(db, text, active_filters, max(top_k * 4, 12))
             )
             for rank, chunk_id in enumerate(fts_rows):
@@ -329,12 +339,15 @@ class RagService:
             matches.append((row["chunk_id"], 1.0))
         if matches or len(normalized) < 3 or normalized.isdigit() or _looks_like_exact_id(query):
             return matches
+        contained_keys = _contained_alias_keys(query)
+        if not contained_keys:
+            return matches
         contains_clauses = [
+            "a.normalized IN (%s)" % ",".join("?" * len(contained_keys)),
             "length(a.normalized)>=2",
             "a.normalized NOT GLOB '[0-9]*'",
-            "instr(?, a.normalized)>0",
         ]
-        contains_params: list[Any] = [normalized]
+        contains_params: list[Any] = list(contained_keys)
         _append_filter_clauses(
             contains_clauses, contains_params, filters, table_alias="c"
         )
@@ -360,8 +373,25 @@ class RagService:
         terms = _fts_terms(query)
         if not terms:
             return []
-        clauses = ["1=1"]
         params: list[Any] = [" OR ".join(f'"{term}"' for term in terms)]
+        if not (
+            filters.entity_types
+            or filters.game_version
+            or filters.source_types
+            or filters.include_stale
+        ):
+            try:
+                return [
+                    row[0]
+                    for row in db.execute(
+                        "SELECT chunk_id FROM chunks_fts WHERE chunks_fts MATCH ? "
+                        "ORDER BY bm25(chunks_fts), chunk_id LIMIT ?",
+                        (*params, limit),
+                    )
+                ]
+            except sqlite3.OperationalError:
+                return []
+        clauses = ["1=1"]
         if not filters.include_stale:
             clauses.append("c.stale=0")
         if filters.entity_types:
@@ -391,7 +421,39 @@ def normalize_alias(value: str) -> str:
 
 def _looks_like_exact_id(value: str) -> bool:
     text = value.strip().casefold()
-    return text.isdigit() or re.fullmatch(r"[a-z_]+:\d+", text) is not None
+    return text.isdigit() or re.fullmatch(
+        r"[a-z][a-z0-9_-]*:[a-z0-9][a-z0-9._/-]*", text
+    ) is not None
+
+
+def _is_explicit_out_of_scope(value: str) -> bool:
+    text = value.casefold()
+    return bool(
+        re.search(r"\bfiend\s+folio\b|\bmodded\b", text)
+        or re.search(r"(?:第三方|某个|这个)?模组(?:道具|角色|敌人|内容)", text)
+    )
+
+
+def _contained_alias_keys(value: str) -> tuple[str, ...]:
+    """生成可走别名索引的有限候选，避免对完整别名表做反向子串扫描。"""
+
+    keys: set[str] = set()
+    latin_tokens = re.findall(r"[0-9a-z]+", value.casefold())
+    for token in latin_tokens:
+        normalized = normalize_alias(token)
+        if len(normalized) >= 2 and not normalized.isdigit():
+            keys.add(normalized)
+    for size in range(2, min(4, len(latin_tokens)) + 1):
+        for start in range(0, len(latin_tokens) - size + 1):
+            joined = "".join(latin_tokens[start : start + size])
+            if len(joined) >= 2:
+                keys.add(joined)
+    for token in re.findall(r"[\u3400-\u9fff]+", value):
+        length = len(token)
+        for size in range(2, min(12, length) + 1):
+            for start in range(0, length - size + 1):
+                keys.add(token[start : start + size])
+    return tuple(sorted(keys, key=lambda item: (-len(item), item)))
 
 
 def _fts_terms(query: str) -> list[str]:

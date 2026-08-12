@@ -26,7 +26,7 @@ data/audio/
 data/indexes/
 data/models/
 data/raw/
-data/knowledge/rag-v2/
+data/knowledge/rag-v2*/
 data/*.db
 data/*.sqlite*
 config/local.toml

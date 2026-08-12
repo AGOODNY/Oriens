@@ -78,6 +78,8 @@ class RagSettings:
     vector_index_path: Path
     vector_batch_size: int
     vector_max_sequence_length: int
+    vector_device: str
+    vector_build_timeout_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +225,12 @@ def load_config(path: Path | None = None) -> OriensConfig:
         vector_max_sequence_length=_optional_positive_int(
             rag_raw, "vector_max_sequence_length", 8192
         ),
+        vector_device=_optional_choice(
+            rag_raw, "vector_device", "cpu", {"cpu", "cuda"}
+        ),
+        vector_build_timeout_seconds=_optional_positive_float(
+            rag_raw, "vector_build_timeout_seconds", 7200.0
+        ),
     )
     return OriensConfig(root, app, providers, roles, budget, rag)
 
@@ -316,6 +324,24 @@ def _optional_positive_int(value: dict[str, Any], name: str, default: int) -> in
     if name not in value:
         return default
     return _positive_int(value, name)
+
+
+def _optional_positive_float(
+    value: dict[str, Any], name: str, default: float
+) -> float:
+    if name not in value:
+        return default
+    return _positive_float(value, name)
+
+
+def _optional_choice(
+    value: dict[str, Any], name: str, default: str, choices: set[str]
+) -> str:
+    result = _optional_string(value, name, default)
+    if result not in choices:
+        allowed = "、".join(sorted(choices))
+        raise ConfigError(f"配置 {name} 必须是：{allowed}")
+    return result
 
 
 def _optional_string_list(value: dict[str, Any], name: str) -> tuple[str, ...]:

@@ -28,6 +28,8 @@ class VectorWorkerClient:
         dimension: int = 1024,
         batch_size: int = 32,
         max_sequence_length: int = 8192,
+        device: str = "cpu",
+        build_timeout_seconds: float = 7200.0,
         request_timeout_seconds: float = 8.0,
     ) -> None:
         self._index_path = index_path.resolve()
@@ -37,6 +39,8 @@ class VectorWorkerClient:
         self._dimension = dimension
         self._batch_size = batch_size
         self._max_sequence_length = max_sequence_length
+        self._device = device
+        self._build_timeout_seconds = build_timeout_seconds
         self._timeout = request_timeout_seconds
         self._process: Any = None
         self._connection: Connection | None = None
@@ -78,6 +82,7 @@ class VectorWorkerClient:
                 self._dimension,
                 self._batch_size,
                 self._max_sequence_length,
+                self._device,
             ),
             name="oriens-bge-m3",
             daemon=True,
@@ -135,12 +140,16 @@ class VectorWorkerClient:
         chunks_path: Path,
         *,
         progress: Any | None = None,
-        timeout_seconds: float = 7200.0,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         return self._build_request(
             {"action": "build_path", "chunks_path": str(chunks_path.resolve())},
             progress=progress,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=(
+                self._build_timeout_seconds
+                if timeout_seconds is None
+                else timeout_seconds
+            ),
         )
 
     def _build_request(
@@ -235,11 +244,12 @@ def _worker_main(
     dimension: int,
     batch_size: int,
     max_sequence_length: int,
+    device: str,
 ) -> None:
     try:
         from sentence_transformers import SentenceTransformer
 
-        model = SentenceTransformer(model_path, device="cpu", local_files_only=True)
+        model = SentenceTransformer(model_path, device=device, local_files_only=True)
         model.max_seq_length = max_sequence_length
         db = sqlite3.connect(index_path)
         faiss_module: Any = None
@@ -280,6 +290,7 @@ def _worker_main(
                 "vector_index_ready": vector_ready,
                 "backend": backend,
                 "max_sequence_length": max_sequence_length,
+                "device": device,
             }
         )
     except Exception:
@@ -421,6 +432,7 @@ def _worker_main(
                             "build_latency_ms": elapsed,
                             "backend": backend,
                             "max_sequence_length": max_sequence_length,
+                            "device": device,
                             "index_bytes": _vector_index_bytes(
                                 backend, Path(index_path), Path(vector_index_path)
                             ),
