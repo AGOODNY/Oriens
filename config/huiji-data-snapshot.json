@@ -1,25 +1,41 @@
 {
   "schema_version": 1,
   "required_exact_titles": [
-    "Data:Entity.tabx",
-    "Data:Item.tabx",
-    "Data:Rooms/00.special_rooms.stb/1006.json",
-    "Data:Rooms/greed/34.mortis.stb/7.json"
-  ],
-  "expected_dependency_titles": [
     "Data:Achievement.tabx",
     "Data:Babies.tabx",
     "Data:Challenge.tabx",
     "Data:Character.tabx",
     "Data:Costumes2.tabx",
     "Data:Encounter.tabx",
-    "Data:Item",
-    "Data:ItemKeywords",
+    "Data:Entity.tabx",
+    "Data:Item.tabx",
     "Data:ItemKeywords.tabx",
     "Data:Rooms",
-    "Data:Wisps"
+    "Data:Rooms/00.special rooms.stb/1006.json",
+    "Data:Rooms/greed/34.mortis.stb/7.json",
+    "Data:Wisps.tabx"
   ],
+  "expected_dependency_titles": [],
+  "required_tabular_tables": {
+    "Data:Entity.tabx": {
+      "minimum_rows": 1000,
+      "required_fields": ["page", "namezh", "nameen", "type", "variant", "subtype"]
+    },
+    "Data:Item.tabx": {
+      "minimum_rows": 1000,
+      "required_fields": ["page", "namezh", "nameen", "namelist", "id", "type", "effect", "source"]
+    },
+    "Data:ItemKeywords.tabx": {
+      "minimum_rows": 1000,
+      "required_fields": ["page", "name_alias", "PinyinIndex"]
+    }
+  },
   "room_title_prefix": "Data:Rooms/",
-  "minimum_room_pages": 1,
-  "minimum_room_stb_pages": 1
+  "minimum_room_pages": 28000,
+  "minimum_room_stb_pages": 28000,
+  "minimum_distinct_room_files": 50,
+  "required_room_fields": [
+    "_type", "_file", "_i", "variant", "name", "type", "subtype", "shape",
+    "width", "height", "difficulty", "weight", "doors", "spawns"
+  ]
 }

@@ -1,8 +1,8 @@
 # Oriens: Your In-Game Guide — 项目计划
 
 > 文档状态：阶段 2 本地 RAG v2
-> 更新日期：2026-08-10
-> 当前阶段：阶段 2 完整正文 RAG 已验收；缺少 Data 命名空间，默认仍保留 rag-v1
+> 更新日期：2026-08-12
+> 当前阶段：阶段 2 Data 快照已补齐并通过独立验收；尚未导入/构建，默认仍保留 rag-v1
 > 目标平台：Windows + Steam《The Binding of Isaac: Repentance+》  
 > 项目形态：以撒 Lua Mod + Python/PySide6 桌面伴侣
 
@@ -573,12 +573,12 @@ OriensYourIn-GameGuide/
 206.5 ms；47 项自动化测试和 2776 条阶段 0 事件回放通过。sqlite-vec 同质量但
 查询延迟更高，因此 v2 显式配置优选 FAISS，业务层接口不变。
 
-未关闭项：模板静态依赖的 `Data:Item.tabx`、`Data:Entity.tabx`、`Data:Rooms`
-和部分 `ROOM_STB` 未包含在现有快照中，无法验收完整英文物品/饰品名称和具体房间
-布局。管理员已允许用户手工进行 API 补采；需按 `docs/huiji-data-supplement.md`
-生成独立的 `Data:` 当前修订 JSONL，完成离线验收和人工
-许可核对。该项完成前默认配置继续指向 37 分块 `rag-v1`，`rag-v2-faiss.toml`
-用于本机显式启用。
+Data 补采快照 `isaac-data-2026-08-11` 已完成：33,019 条当前修订，包含
+`Data:Item.tabx`、`Data:Entity.tabx`、`Data:ItemKeywords.tabx` 和 28,464 条
+`ROOM_STB`。独立流式审计已通过；尚未执行 RAG 导入、嵌入或索引构建。源表中
+Item 数字 ID 跨类型复用，Entity 的 `1000.204.0` 存在一组冲突，后续导入必须
+分别使用类型前缀和显式冲突标记。完成新语料验收前，默认配置继续指向 37 分块
+`rag-v1`，`rag-v2-faiss.toml` 用于本机显式启用。
 
 ### 阶段3：语音闭环
 

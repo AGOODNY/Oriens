@@ -21,6 +21,7 @@ def _record(title: str, page_id: int, content: object, *, namespace: int = 486) 
         "redirect": False,
         "revision_id": revision_id,
         "revision_timestamp": "2026-08-11T00:00:00Z",
+        "revision_sha1": "wiki-sha1",
         "content_model": "Json.JsonConfig" if title.endswith(".json") else "Tabular.JsonConfig",
         "wikitext": text,
         "content_checksum": "sha256:" + sha256(text.encode("utf-8")).hexdigest(),
@@ -42,9 +43,17 @@ def _requirements(path: Path) -> None:
                 "schema_version": 1,
                 "required_exact_titles": ["Data:Item.tabx", "Data:Entity.tabx"],
                 "expected_dependency_titles": ["Data:Rooms"],
+                "required_tabular_tables": {
+                    "Data:Item.tabx": {
+                        "minimum_rows": 1,
+                        "required_fields": ["page", "nameen"],
+                    }
+                },
                 "room_title_prefix": "Data:Rooms/",
                 "minimum_room_pages": 1,
                 "minimum_room_stb_pages": 1,
+                "minimum_distinct_room_files": 1,
+                "required_room_fields": ["_type", "_file", "spawns"],
             },
             ensure_ascii=False,
         ),
@@ -60,13 +69,25 @@ class HuijiDataAuditTests(unittest.TestCase):
             pages = root / "pages.jsonl"
             _requirements(requirements)
             records = [
-                _record("Data:Item.tabx", 1, {"schema": {"fields": []}, "data": []}),
+                _record(
+                    "Data:Item.tabx",
+                    1,
+                    {
+                        "schema": {"fields": [{"name": "page"}, {"name": "nameen"}]},
+                        "data": [["硫磺火", "Brimstone"]],
+                    },
+                ),
                 _record("Data:Entity.tabx", 2, {"schema": {"fields": []}, "data": []}),
                 _record("Data:Rooms", 3, {"description": "room index"}),
                 _record(
                     "Data:Rooms/test.stb/1.json",
                     4,
-                    {"_id": "Data:Rooms/test.stb/1.json", "_type": "ROOM_STB"},
+                    {
+                        "_id": "Data:Rooms/test.stb/1.json",
+                        "_type": "ROOM_STB",
+                        "_file": "test.stb",
+                        "spawns": [],
+                    },
                 ),
             ]
             pages.write_text(
@@ -79,6 +100,8 @@ class HuijiDataAuditTests(unittest.TestCase):
             self.assertEqual(report["status"], "ready")
             self.assertEqual(report["records"], 4)
             self.assertEqual(report["room_stb_pages"], 1)
+            self.assertEqual(report["distinct_room_files"], 1)
+            self.assertEqual(report["tabular_tables"]["Data:Item.tabx"]["rows"], 1)
             self.assertEqual(report["missing_required_titles"], [])
             self.assertFalse(report["lua_execution"])
 
@@ -89,11 +112,18 @@ class HuijiDataAuditTests(unittest.TestCase):
             pages = root / "pages.jsonl"
             _requirements(requirements)
             records = [
-                _record("Data:Item.tabx", 1, {"data": []}),
+                _record(
+                    "Data:Item.tabx",
+                    1,
+                    {
+                        "schema": {"fields": [{"name": "page"}, {"name": "nameen"}]},
+                        "data": [["硫磺火", "Brimstone"]],
+                    },
+                ),
                 _record(
                     "Data:Rooms/test.stb/1.json",
                     2,
-                    {"_type": "ROOM_STB"},
+                    {"_type": "ROOM_STB", "_file": "test.stb", "spawns": []},
                 ),
             ]
             pages.write_text(
@@ -118,6 +148,39 @@ class HuijiDataAuditTests(unittest.TestCase):
 
             with self.assertRaisesRegex(DataSnapshotAuditError, "校验和不匹配"):
                 audit_data_snapshot(pages, requirements, expected_namespace=486)
+
+    def test_missing_required_tabular_field_is_incomplete(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            requirements = root / "requirements.json"
+            pages = root / "pages.jsonl"
+            _requirements(requirements)
+            records = [
+                _record(
+                    "Data:Item.tabx",
+                    1,
+                    {
+                        "schema": {"fields": [{"name": "page"}]},
+                        "data": [["硫磺火"]],
+                    },
+                ),
+                _record("Data:Entity.tabx", 2, {"data": []}),
+                _record("Data:Rooms", 3, {"description": "room index"}),
+                _record(
+                    "Data:Rooms/test.stb/1.json",
+                    4,
+                    {"_type": "ROOM_STB", "_file": "test.stb", "spawns": []},
+                ),
+            ]
+            pages.write_text(
+                "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
+                encoding="utf-8",
+            )
+
+            report = audit_data_snapshot(pages, requirements, expected_namespace=486)
+
+            self.assertEqual(report["status"], "incomplete")
+            self.assertIn("Data:Item.tabx 缺少字段：nameen", report["coverage_failures"])
 
     def test_wrong_namespace_stops_validation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

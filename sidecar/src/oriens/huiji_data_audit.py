@@ -12,7 +12,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import sys
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 
 _REQUIRED_RAW_FIELDS = {
@@ -26,6 +26,7 @@ _REQUIRED_RAW_FIELDS = {
     "redirect",
     "retrieved_at",
     "revision_id",
+    "revision_sha1",
     "revision_timestamp",
     "revision_url",
     "source_title",
@@ -61,10 +62,16 @@ def audit_data_snapshot(
     input_digest = sha256()
     records = 0
     redirects = 0
+    stale_records = 0
     json_pages = 0
     room_pages = 0
     room_stb_pages = 0
+    room_files: Counter[str] = Counter()
+    room_missing_fields: Counter[str] = Counter()
+    tabular_tables: dict[str, dict[str, Any]] = {}
     room_prefix = requirements["room_title_prefix"]
+    required_room_fields = tuple(requirements["required_room_fields"])
+    required_tabular_tables = requirements["required_tabular_tables"]
 
     try:
         source = pages_path.open("rb")
@@ -92,6 +99,7 @@ def audit_data_snapshot(
             namespace_counts[record["namespace"]] += 1
             content_models[record["content_model"] or "unknown"] += 1
             redirects += int(record["redirect"])
+            stale_records += int(record["stale"])
 
             revision_key = (record["page_id"], record["revision_id"])
             if revision_key in seen_revisions:
@@ -122,8 +130,15 @@ def audit_data_snapshot(
                     f"{pages_path.name}:{line_number} Data JSON 内容无效：{title}"
                 ) from exc
             json_pages += 1
-            if title.startswith(room_prefix) and _contains_room_stb(payload):
-                room_stb_pages += 1
+            if title in required_tabular_tables:
+                tabular_tables[title] = _tabular_profile(payload)
+            if title.startswith(room_prefix) and isinstance(payload, dict):
+                if payload.get("_type") == "ROOM_STB":
+                    room_stb_pages += 1
+                    room_files[str(payload.get("_file", ""))] += 1
+                    for field in required_room_fields:
+                        if field not in payload:
+                            room_missing_fields[field] += 1
 
     missing_required = sorted(required_titles - found_titles, key=str.casefold)
     missing_expected = sorted(expected_titles - found_titles, key=str.casefold)
@@ -136,6 +151,28 @@ def audit_data_snapshot(
         coverage_failures.append(
             "未在 Data:Rooms JSON 页面中发现足够的 _type=ROOM_STB 记录"
         )
+    if len(room_files) < requirements["minimum_distinct_room_files"]:
+        coverage_failures.append(
+            f"ROOM_STB 文件数 {len(room_files)} 小于要求 "
+            f"{requirements['minimum_distinct_room_files']}"
+        )
+    if room_missing_fields:
+        coverage_failures.append("部分 ROOM_STB 记录缺少必需结构字段")
+    for title, rule in required_tabular_tables.items():
+        profile = tabular_tables.get(title)
+        if profile is None:
+            continue
+        if profile["rows"] < rule["minimum_rows"]:
+            coverage_failures.append(
+                f"{title} 数据行数 {profile['rows']} 小于要求 {rule['minimum_rows']}"
+            )
+        missing_fields = sorted(
+            set(rule["required_fields"]) - set(profile["fields"]), key=str.casefold
+        )
+        if missing_fields:
+            coverage_failures.append(
+                f"{title} 缺少字段：{', '.join(missing_fields)}"
+            )
 
     status = "ready"
     if missing_required or coverage_failures:
@@ -148,11 +185,18 @@ def audit_data_snapshot(
         "expected_namespace": expected_namespace,
         "records": records,
         "redirects": redirects,
+        "stale_records": stale_records,
         "namespace_counts": _sorted_counter(namespace_counts),
         "content_models": _sorted_counter(content_models),
         "json_pages": json_pages,
         "room_pages": room_pages,
         "room_stb_pages": room_stb_pages,
+        "distinct_room_files": len(room_files),
+        "room_records_missing_fields": _sorted_counter(room_missing_fields),
+        "tabular_tables": {
+            title: tabular_tables[title]
+            for title in sorted(tabular_tables, key=str.casefold)
+        },
         "required_titles_found": sorted(required_titles & found_titles, key=str.casefold),
         "missing_required_titles": missing_required,
         "missing_expected_dependency_titles": missing_expected,
@@ -177,9 +221,31 @@ def _load_requirements(path: Path) -> dict[str, Any]:
     prefix = value.get("room_title_prefix")
     if not isinstance(prefix, str) or not prefix.startswith("Data:Rooms/"):
         raise DataSnapshotAuditError("依赖配置字段 room_title_prefix 无效")
-    for field in ("minimum_room_pages", "minimum_room_stb_pages"):
+    for field in (
+        "minimum_room_pages",
+        "minimum_room_stb_pages",
+        "minimum_distinct_room_files",
+    ):
         if type(value.get(field)) is not int or value[field] < 0:
             raise DataSnapshotAuditError(f"依赖配置字段 {field} 无效")
+    room_fields = value.get("required_room_fields")
+    if not isinstance(room_fields, list) or not all(
+        isinstance(item, str) and item for item in room_fields
+    ):
+        raise DataSnapshotAuditError("依赖配置字段 required_room_fields 无效")
+    tables = value.get("required_tabular_tables")
+    if not isinstance(tables, dict):
+        raise DataSnapshotAuditError("依赖配置字段 required_tabular_tables 无效")
+    for title, rule in tables.items():
+        if not isinstance(title, str) or not title.startswith("Data:"):
+            raise DataSnapshotAuditError("表格依赖标题无效")
+        if not isinstance(rule, dict) or type(rule.get("minimum_rows")) is not int:
+            raise DataSnapshotAuditError(f"{title} 表格行数要求无效")
+        fields = rule.get("required_fields")
+        if rule["minimum_rows"] < 0 or not isinstance(fields, list) or not all(
+            isinstance(item, str) and item for item in fields
+        ):
+            raise DataSnapshotAuditError(f"{title} 表格字段要求无效")
     return value
 
 
@@ -220,6 +286,7 @@ def _validate_record(
         "document_id",
         "license_note",
         "retrieved_at",
+        "revision_sha1",
         "revision_timestamp",
         "source_title",
         "source_type",
@@ -238,14 +305,21 @@ def _should_parse_json(title: str, content_model: str) -> bool:
     )
 
 
-def _contains_room_stb(value: Any) -> bool:
-    if isinstance(value, dict):
-        if value.get("_type") == "ROOM_STB":
-            return True
-        return any(_contains_room_stb(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_room_stb(item) for item in value)
-    return False
+def _tabular_profile(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {"rows": 0, "fields": []}
+    data = value.get("data")
+    schema = value.get("schema")
+    fields_value = schema.get("fields") if isinstance(schema, dict) else None
+    fields = [
+        field["name"]
+        for field in fields_value or []
+        if isinstance(field, dict) and isinstance(field.get("name"), str)
+    ]
+    return {
+        "rows": len(data) if isinstance(data, list) else 0,
+        "fields": fields,
+    }
 
 
 def _sorted_counter(counter: Mapping[Any, int]) -> dict[str, int]:
