@@ -224,9 +224,12 @@ class RagService:
 
         degraded = self._vector is None or not self._vector.available
         reason = "向量 Worker 未配置，已使用关键词检索"
+        # 精确实体/别名已提供最高置信证据时，无需重复计算查询向量。
+        # 语义改写和没有精确命中的普通问题仍使用配置的 FAISS/sqlite-vec Worker。
+        skip_vector = bool(exact_rows)
         if self._vector is not None:
             reason = self._vector.unavailable_reason
-            if self._vector.available and not (
+            if self._vector.available and not skip_vector and not (
                 _looks_like_exact_id(text) and not exact_rows
             ):
                 try:
@@ -330,7 +333,7 @@ class RagService:
         params: list[Any] = [normalized]
         _append_filter_clauses(clauses, params, filters, table_alias="c")
         rows = db.execute(
-            "SELECT a.chunk_id, a.normalized FROM aliases a "
+            "SELECT a.chunk_id, a.normalized FROM aliases a INDEXED BY aliases_normalized "
             "JOIN chunks c ON c.chunk_id=a.chunk_id WHERE " + " AND ".join(clauses),
             params,
         ).fetchall()
@@ -352,7 +355,7 @@ class RagService:
             contains_clauses, contains_params, filters, table_alias="c"
         )
         contains_rows = db.execute(
-            "SELECT a.chunk_id, a.normalized FROM aliases a "
+            "SELECT a.chunk_id, a.normalized FROM aliases a INDEXED BY aliases_normalized "
             "JOIN chunks c ON c.chunk_id=a.chunk_id WHERE "
             + " AND ".join(contains_clauses)
             + " ORDER BY length(a.normalized) DESC, a.chunk_id LIMIT 100",

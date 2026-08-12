@@ -1,8 +1,8 @@
 # Oriens: Your In-Game Guide — 项目计划
 
-> 文档状态：阶段 2 本地 RAG v2
+> 文档状态：阶段 3 语音闭环
 > 更新日期：2026-08-12
-> 当前阶段：阶段 2 `rag-v2.1` 完整本地语料已导入、索引、评测并验收；`rag-v1` 仍保留为可回滚基线
+> 当前阶段：阶段 3 链式语音闭环已完成代码、模拟性能与自动化验收；真实设备和百炼网络联调待显式授权
 > 目标平台：Windows + Steam《The Binding of Isaac: Repentance+》  
 > 项目形态：以撒 Lua Mod + Python/PySide6 桌面伴侣
 

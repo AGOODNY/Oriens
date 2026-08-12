@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import tempfile
+from threading import Event
 import time
 import unittest
 
@@ -19,6 +20,7 @@ from oriens.config import load_config
 from oriens.knowledge import LocalItemKnowledgeBase
 from oriens.modeling import ModelRouter
 from oriens.protocol import GameEvent
+from oriens.voice import VoiceState
 
 
 @unittest.skipIf(QApplication is None, "当前解释器未安装 PySide6")
@@ -57,6 +59,12 @@ class OverlayTests(unittest.TestCase):
             app.processEvents()
             self.assertIn("Oriens", window.windowTitle())
             self.assertIn("离线模拟模式", window.mode_label.text())
+            self.assertEqual(window.voice_status_label.text(), "离线不可用")
+            self.assertTrue(window.ask_button.isEnabled())
+            self.assertFalse(window.ptt_button.isEnabled())
+            window._voice_signals.state.emit("", VoiceState.LISTENING)
+            app.processEvents()
+            self.assertEqual(window.voice_status_label.text(), "正在聆听")
             event = GameEvent(
                 schema_version=1,
                 seq=1,
@@ -107,6 +115,43 @@ class OverlayTests(unittest.TestCase):
             window.close()
             app.processEvents()
             self.assertFalse(window.isVisible())
+
+    def test_injected_voice_service_is_closed_with_window(self) -> None:
+        assert QApplication is not None
+        from oriens.ui import OverlayWindow
+
+        class FakeVoiceService:
+            closed = False
+            cancelled = 0
+            pressed = 0
+            def devices(self): return (("test", "测试麦克风"),)
+            def is_current(self, request_id): return True
+            def speak_validated(self, text): return "id"
+            def room_changed(self): return None
+            def press(self, device_id): self.pressed += 1
+            def cancel(self): self.cancelled += 1
+            def close(self): self.closed = True
+
+        app = QApplication.instance() or QApplication([])
+        config = load_config()
+        knowledge = LocalItemKnowledgeBase.load(config.app.knowledge_path)
+        budget = BudgetTracker(config.budget.run_limit_cny)
+        engine = AdviceEngine(knowledge, ModelRouter(config, online=False, api_key=None), budget)
+        fake = FakeVoiceService()
+        with tempfile.TemporaryDirectory() as directory:
+            window = OverlayWindow(
+                config=config, log_path=Path(directory) / "missing.log",
+                knowledge=knowledge, advice_engine=engine, budget=budget,
+                voice_service=fake,
+            )
+            self.assertEqual(window.input_device_combo.count(), 1)
+            window._cancel = Event()
+            window._voice_press()
+            self.assertTrue(window._cancel is None)
+            self.assertEqual(fake.pressed, 1)
+            window.close()
+            app.processEvents()
+            self.assertTrue(fake.closed)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from contextlib import nullcontext
 import json
+import math
 from pathlib import Path
 import platform
 import sys
@@ -12,10 +13,12 @@ import time
 from typing import TextIO
 
 from .advice import AdviceEngine
+from .audio import AudioChunk, AudioFormat, MemoryMicrophone, QueuedAudioPlayer
 from .budget import BudgetTracker
 from .config import ConfigError, OriensConfig, load_api_key, load_config
 from .knowledge import KnowledgeError, LocalItemKnowledgeBase
 from .modeling import ModelRouter
+from .query import QueryEngine
 from .protocol import EventParseError, GameEvent, parse_event_line
 from .rag import RagError, RagFilters, RagService
 from .rag_eval import evaluate
@@ -30,6 +33,9 @@ from .rag_v2_pipeline import RagV2Paths, build_full_corpus
 from .rag_worker import VectorWorkerClient, convert_sqlite_vectors_to_faiss
 from .state import EventOrderError, StateStore
 from .tailer import LogTailer
+from .voice import CosyVoiceStreamingTTS, QwenRealtimeASR
+from .voice import MockRealtimeASR, MockStreamingTTS, TerminologyCorrector
+from .voice_service import VoiceCallbacks, VoiceService
 
 
 def default_log_path() -> Path:
@@ -140,7 +146,7 @@ def _make_advice_services(
     *,
     online: bool,
     enable_vector: bool = False,
-) -> tuple[OriensConfig, LocalItemKnowledgeBase, BudgetTracker, AdviceEngine, bool]:
+) -> tuple[OriensConfig, LocalItemKnowledgeBase, BudgetTracker, AdviceEngine, bool, ModelRouter]:
     config = load_config(config_path)
     provider, _model = config.provider_for("advice")
     api_key = load_api_key(provider.api_key_env)
@@ -159,7 +165,7 @@ def _make_advice_services(
     engine = AdviceEngine(
         knowledge, router, budget, rag=rag, game_version=config.rag.game_version
     )
-    return config, knowledge, budget, engine, bool(api_key)
+    return config, knowledge, budget, engine, bool(api_key), router
 
 
 def _ensure_rag_index(config: OriensConfig) -> None:
@@ -216,7 +222,7 @@ def _demo_event(collectible_id: int, seq: int = 1) -> GameEvent:
 
 def run_advice_demo(args: argparse.Namespace) -> int:
     try:
-        _config, knowledge, budget, engine, _key_available = _make_advice_services(
+        _config, knowledge, budget, engine, _key_available, _router = _make_advice_services(
             args.config, online=False
         )
         if knowledge.find(args.collectible_id) is None:
@@ -239,7 +245,7 @@ def run_api_smoke(args: argparse.Namespace) -> int:
         )
         return 1
     try:
-        config, knowledge, budget, engine, key_available = _make_advice_services(
+        config, knowledge, budget, engine, key_available, _router = _make_advice_services(
             args.config, online=True
         )
         if not key_available:
@@ -263,7 +269,7 @@ def run_api_smoke(args: argparse.Namespace) -> int:
 
 def run_ui(args: argparse.Namespace) -> int:
     try:
-        config, knowledge, budget, engine, key_available = _make_advice_services(
+        config, knowledge, budget, engine, key_available, router = _make_advice_services(
             args.config, online=args.online, enable_vector=True
         )
     except (ConfigError, KnowledgeError, RagError, CorpusValidationError) as exc:
@@ -277,6 +283,18 @@ def run_ui(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    assert engine.rag is not None
+    query_engine = QueryEngine(
+        engine.rag, router, budget, game_version=config.rag.game_version
+    )
+    provider, _model = config.provider_for("advice")
+    api_key = load_api_key(provider.api_key_env)
+    workspace_id = load_api_key(config.voice.workspace_id_env)
+    asr = None
+    tts = None
+    if args.online and api_key and workspace_id:
+        asr = QwenRealtimeASR(config.voice, config.audio, api_key, workspace_id)
+        tts = CosyVoiceStreamingTTS(config.voice, api_key, workspace_id)
     return run_overlay(
         config=config,
         log_path=args.log.resolve(),
@@ -286,7 +304,175 @@ def run_ui(args: argparse.Namespace) -> int:
         from_start=args.from_start,
         online_requested=args.online,
         api_key_available=key_available,
+        query_engine=query_engine,
+        asr=asr,
+        tts=tts,
     )
+
+
+def run_voice_benchmark(args: argparse.Namespace) -> int:
+    """阶段 3 零费用模拟闭环；指标明确不代表真实设备或百炼网络。"""
+
+    if args.iterations <= 0 or args.stress_cycles <= 0 or args.timeout <= 0:
+        print("模拟语音基准参数必须为正数", file=sys.stderr)
+        return 1
+
+    try:
+        config, _knowledge, budget, engine, _key, router = _make_advice_services(
+            args.config, online=False, enable_vector=True
+        )
+        assert engine.rag is not None
+        query = QueryEngine(
+            engine.rag, router, budget, game_version=config.rag.game_version
+        )
+    except (ConfigError, KnowledgeError, RagError, CorpusValidationError) as exc:
+        print(f"启动失败：{exc}", file=sys.stderr)
+        return 1
+
+    try:
+        import psutil
+    except ImportError:
+        psutil = None
+    state = StateStore().state
+    state.run_id = "VOICE BENCHMARK:0"
+    state.active = True
+    state.last_seq = 1
+    state.context = {"room_index": 4, "room_spawn_seed": 20260812, "stage": 1}
+    budget.set_run(state.run_id)
+    microphone = MemoryMicrophone()
+    played: list[AudioChunk] = []
+    player = QueuedAudioPlayer(played.append, config.audio.playback_queue_max_chunks)
+    completed = []
+    errors: list[str] = []
+    service = VoiceService(
+        audio_settings=config.audio,
+        voice_settings=config.voice,
+        microphone=microphone,
+        player=player,
+        asr=MockRealtimeASR("硫磺火有什么效果", ("硫磺火",)),
+        tts=MockStreamingTTS(AudioFormat(config.audio.playback_sample_rate)),
+        query_engine=query,
+        terminology=TerminologyCorrector({}),
+        state_provider=lambda: state,
+        callbacks=VoiceCallbacks(
+            on_state=lambda _request_id, _value: None,
+            on_transcript=lambda _request_id, _value: None,
+            on_question=lambda _request_id, _value: None,
+            on_answer=lambda _request_id, _value, _token: None,
+            on_error=lambda _request_id, value: errors.append(value),
+            on_metrics=lambda _request_id, value: completed.append(value),
+        ),
+    )
+    process = psutil.Process() if psutil is not None else None
+    cpu_before = _process_cpu_seconds(process)
+    peak_rss = _process_rss(process)
+    fmt = AudioFormat(config.audio.input_sample_rate)
+    generated = AudioChunk(b"\x10\x04" * 4800, fmt, 0)
+    try:
+        for index in range(args.iterations):
+            before = len(completed)
+            if service.press("memory") is None:
+                raise RuntimeError("模拟麦克风启动失败")
+            microphone.feed(generated)
+            service.release()
+            deadline = time.monotonic() + args.timeout
+            while len(completed) == before and time.monotonic() < deadline:
+                time.sleep(0.005)
+            if len(completed) == before:
+                raise RuntimeError(f"第 {index + 1} 次模拟闭环超时")
+            peak_rss = max(peak_rss, _process_rss(process))
+
+        interrupt_values = []
+        for _ in range(args.stress_cycles):
+            service.press("memory")
+            microphone.feed(generated)
+            started = time.perf_counter()
+            service.cancel()
+            interrupt_values.append((time.perf_counter() - started) * 1000)
+        peak_rss = max(peak_rss, _process_rss(process))
+        cpu_after = _process_cpu_seconds(process)
+        fields = {
+            "capture_start_ms": [item.capture_start_ms for item in completed],
+            "asr_first_partial_ms": [item.asr_first_partial_ms for item in completed],
+            "asr_final_ms": [item.asr_final_ms for item in completed],
+            "rag_ms": [item.rag_ms for item in completed],
+            "model_text_ms": [item.model_first_text_ms for item in completed],
+            "tts_first_audio_ms": [item.tts_first_audio_ms for item in completed],
+            "first_audio_end_to_end_ms": [item.first_audio_end_to_end_ms for item in completed],
+            "interrupt_ms": interrupt_values,
+        }
+        report = {
+            "mode": "simulation",
+            "network_calls": 0,
+            "config": str((args.config or Path("config/default.toml")).resolve()),
+            "corpus_version": config.rag.content_version,
+            "vector_backend": config.rag.vector_backend,
+            "iterations": args.iterations,
+            "stress_cycles": args.stress_cycles,
+            "metrics": {
+                name: {
+                    "p50": round(_percentile(values, 0.50), 3),
+                    "p95": round(_percentile(values, 0.95), 3),
+                    "max": round(max(values), 3),
+                }
+                for name, values in fields.items()
+            },
+            "cpu_seconds": round(max(0.0, cpu_after - cpu_before), 3),
+            "peak_rss_bytes": peak_rss,
+            "queue_peak_chunks": max((item.queue_peak for item in completed), default=0),
+            "errors": errors,
+        }
+        _json_output(report)
+        return 0 if not errors else 2
+    except RuntimeError as exc:
+        print(f"模拟语音基准失败：{exc}", file=sys.stderr)
+        return 1
+    finally:
+        service.close()
+        engine.rag.close()
+
+
+def _percentile(values: list[float], quantile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, math.ceil(quantile * len(ordered)) - 1))
+    return ordered[index]
+
+
+def _process_cpu_seconds(process) -> float:
+    if process is None:
+        return 0.0
+    values = [process]
+    try:
+        values.extend(process.children(recursive=True))
+    except Exception:
+        pass
+    total = 0.0
+    for item in values:
+        try:
+            times = item.cpu_times()
+            total += times.user + times.system
+        except Exception:
+            pass
+    return total
+
+
+def _process_rss(process) -> int:
+    if process is None:
+        return 0
+    values = [process]
+    try:
+        values.extend(process.children(recursive=True))
+    except Exception:
+        pass
+    total = 0
+    for item in values:
+        try:
+            total += item.memory_info().rss
+        except Exception:
+            pass
+    return total
 
 
 def run_rag_build(args: argparse.Namespace) -> int:
@@ -545,7 +731,7 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--verbose", action="store_true")
     replay.set_defaults(handler=run_replay)
 
-    ui = subparsers.add_parser("ui", help="启动阶段 1 简体中文悬浮窗")
+    ui = subparsers.add_parser("ui", help="启动阶段 3 简体中文语音悬浮窗")
     ui.add_argument("--log", type=Path, default=default_log_path())
     ui.add_argument("--config", type=Path)
     ui.add_argument("--from-start", action="store_true")
@@ -555,6 +741,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="显式启用百炼；未指定或缺少密钥时使用零费用模拟模型",
     )
     ui.set_defaults(handler=run_ui)
+
+    voice_benchmark = subparsers.add_parser(
+        "voice-benchmark", help="运行零费用模拟语音闭环与打断基准"
+    )
+    voice_benchmark.add_argument("--config", type=Path)
+    voice_benchmark.add_argument("--iterations", type=int, default=20)
+    voice_benchmark.add_argument("--stress-cycles", type=int, default=100)
+    voice_benchmark.add_argument("--timeout", type=float, default=10.0)
+    voice_benchmark.set_defaults(handler=run_voice_benchmark)
 
     demo = subparsers.add_parser("advice-demo", help="使用模拟模型生成固定道具建议")
     demo.add_argument("collectible_id", type=int, nargs="?", default=350)

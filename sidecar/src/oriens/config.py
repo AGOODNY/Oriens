@@ -52,6 +52,50 @@ class BudgetSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class AudioSettings:
+    input_format: str
+    input_sample_rate: int
+    input_channels: int
+    input_sample_width_bytes: int
+    chunk_duration_ms: int
+    max_recording_seconds: float
+    min_recording_ms: int
+    silence_rms_threshold: int
+    noise_rms_threshold: int
+    playback_format: str
+    playback_sample_rate: int
+    playback_channels: int
+    playback_queue_max_chunks: int
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceSettings:
+    enabled: bool
+    push_to_talk_key: str
+    asr_provider: str
+    asr_model_id: str
+    asr_endpoint: str
+    asr_language: str
+    asr_timeout_seconds: float
+    asr_max_retries: int
+    asr_price_per_second_cny: float
+    tts_provider: str
+    tts_model_id: str
+    tts_endpoint: str
+    tts_voice: str
+    tts_rate: float
+    tts_volume: int
+    tts_format: str
+    tts_sample_rate: int
+    tts_timeout_seconds: float
+    tts_max_retries: int
+    tts_max_segment_chars: int
+    tts_price_per_10k_chars_cny: float
+    pricing_checked_on: str
+    workspace_id_env: str
+
+
+@dataclass(frozen=True, slots=True)
 class RagSettings:
     source_path: Path
     chunks_path: Path
@@ -90,6 +134,8 @@ class OriensConfig:
     model_roles: dict[str, ModelRoleSettings]
     budget: BudgetSettings
     rag: RagSettings
+    audio: AudioSettings
+    voice: VoiceSettings
 
     def provider_for(self, role: str) -> tuple[ProviderSettings, ModelRoleSettings]:
         try:
@@ -158,6 +204,48 @@ def load_config(path: Path | None = None) -> OriensConfig:
         )
 
     budget = BudgetSettings(run_limit_cny=_positive_float(budget_raw, "run_limit_cny"))
+    audio_raw = _section(raw, "audio")
+    voice_raw = _section(raw, "voice")
+    audio = AudioSettings(
+        input_format=_optional_choice(audio_raw, "input_format", "pcm_s16le", {"pcm_s16le"}),
+        input_sample_rate=_positive_int(audio_raw, "input_sample_rate"),
+        input_channels=_optional_positive_int(audio_raw, "input_channels", 1),
+        input_sample_width_bytes=_optional_positive_int(audio_raw, "input_sample_width_bytes", 2),
+        chunk_duration_ms=_optional_positive_int(audio_raw, "chunk_duration_ms", 100),
+        max_recording_seconds=_optional_positive_float(audio_raw, "max_recording_seconds", 30.0),
+        min_recording_ms=_optional_positive_int(audio_raw, "min_recording_ms", 250),
+        silence_rms_threshold=_optional_nonnegative_int(audio_raw, "silence_rms_threshold", 90),
+        noise_rms_threshold=_optional_nonnegative_int(audio_raw, "noise_rms_threshold", 180),
+        playback_format=_optional_choice(audio_raw, "playback_format", "pcm_s16le", {"pcm_s16le"}),
+        playback_sample_rate=_positive_int(audio_raw, "playback_sample_rate"),
+        playback_channels=_optional_positive_int(audio_raw, "playback_channels", 1),
+        playback_queue_max_chunks=_optional_positive_int(audio_raw, "playback_queue_max_chunks", 64),
+    )
+    voice = VoiceSettings(
+        enabled=_optional_boolean(voice_raw, "enabled", True),
+        push_to_talk_key=_optional_string(voice_raw, "push_to_talk_key", "Space"),
+        asr_provider=_string(voice_raw, "asr_provider"),
+        asr_model_id=_string(voice_raw, "asr_model_id"),
+        asr_endpoint=_string(voice_raw, "asr_endpoint"),
+        asr_language=_optional_string(voice_raw, "asr_language", "zh"),
+        asr_timeout_seconds=_positive_float(voice_raw, "asr_timeout_seconds"),
+        asr_max_retries=_nonnegative_int(voice_raw, "asr_max_retries"),
+        asr_price_per_second_cny=_nonnegative_float(voice_raw, "asr_price_per_second_cny"),
+        tts_provider=_string(voice_raw, "tts_provider"),
+        tts_model_id=_string(voice_raw, "tts_model_id"),
+        tts_endpoint=_string(voice_raw, "tts_endpoint"),
+        tts_voice=_string(voice_raw, "tts_voice"),
+        tts_rate=_optional_range_float(voice_raw, "tts_rate", 1.0, 0.5, 2.0),
+        tts_volume=_optional_range_int(voice_raw, "tts_volume", 50, 0, 100),
+        tts_format=_optional_choice(voice_raw, "tts_format", "pcm", {"pcm", "wav", "mp3", "opus"}),
+        tts_sample_rate=_choice_int(voice_raw, "tts_sample_rate", {8000, 16000, 22050, 24000, 44100, 48000}),
+        tts_timeout_seconds=_positive_float(voice_raw, "tts_timeout_seconds"),
+        tts_max_retries=_nonnegative_int(voice_raw, "tts_max_retries"),
+        tts_max_segment_chars=_optional_positive_int(voice_raw, "tts_max_segment_chars", 80),
+        tts_price_per_10k_chars_cny=_nonnegative_float(voice_raw, "tts_price_per_10k_chars_cny"),
+        pricing_checked_on=_string(voice_raw, "pricing_checked_on"),
+        workspace_id_env=_optional_string(voice_raw, "workspace_id_env", "DASHSCOPE_WORKSPACE_ID"),
+    )
     rag = RagSettings(
         source_path=(root / _string(rag_raw, "source_path")).resolve(),
         chunks_path=(root / _string(rag_raw, "chunks_path")).resolve(),
@@ -232,7 +320,15 @@ def load_config(path: Path | None = None) -> OriensConfig:
             rag_raw, "vector_build_timeout_seconds", 7200.0
         ),
     )
-    return OriensConfig(root, app, providers, roles, budget, rag)
+    if audio.input_channels != 1 or audio.input_sample_width_bytes != 2:
+        raise ConfigError("阶段 3 麦克风输入必须是单声道 16-bit PCM")
+    if audio.input_sample_rate not in {8000, 16000}:
+        raise ConfigError("Qwen 实时 ASR 输入采样率必须是 8000 或 16000 Hz")
+    if voice.tts_format != "pcm":
+        raise ConfigError("阶段 3 本地播放器仅支持 TTS 输出 PCM；请将 voice.tts_format 设为 pcm")
+    if voice.tts_sample_rate != audio.playback_sample_rate:
+        raise ConfigError("voice.tts_sample_rate 必须与 audio.playback_sample_rate 一致")
+    return OriensConfig(root, app, providers, roles, budget, rag, audio, voice)
 
 
 def load_api_key(variable_name: str, env_path: Path | None = None) -> str | None:
@@ -332,6 +428,60 @@ def _optional_positive_float(
     if name not in value:
         return default
     return _positive_float(value, name)
+
+
+def _optional_nonnegative_int(value: dict[str, Any], name: str, default: int) -> int:
+    if name not in value:
+        return default
+    return _nonnegative_int(value, name)
+
+
+def _optional_nonnegative_float(value: dict[str, Any], name: str, default: float) -> float:
+    if name not in value:
+        return default
+    return _nonnegative_float(value, name)
+
+
+def _optional_boolean(value: dict[str, Any], name: str, default: bool) -> bool:
+    if name not in value:
+        return default
+    return _boolean(value, name)
+
+
+def _optional_range_int(
+    value: dict[str, Any], name: str, default: int, minimum: int, maximum: int
+) -> int:
+    result = value.get(name, default)
+    if type(result) is not int or not minimum <= result <= maximum:
+        raise ConfigError(f"配置 {name} 必须在 {minimum} 到 {maximum} 之间")
+    return result
+
+
+def _optional_range_float(
+    value: dict[str, Any], name: str, default: float, minimum: float, maximum: float
+) -> float:
+    result = value.get(name, default)
+    if type(result) not in {int, float} or not minimum <= float(result) <= maximum:
+        raise ConfigError(f"配置 {name} 必须在 {minimum} 到 {maximum} 之间")
+    return float(result)
+
+
+def _optional_choice_int(
+    value: dict[str, Any], name: str, default: int, choices: set[int]
+) -> int:
+    result = value.get(name, default)
+    if type(result) is not int or result not in choices:
+        allowed = "、".join(str(item) for item in sorted(choices))
+        raise ConfigError(f"配置 {name} 必须是：{allowed}")
+    return result
+
+
+def _choice_int(value: dict[str, Any], name: str, choices: set[int]) -> int:
+    result = value.get(name)
+    if type(result) is not int or result not in choices:
+        allowed = "、".join(str(item) for item in sorted(choices))
+        raise ConfigError(f"配置 {name} 必须是：{allowed}")
+    return result
 
 
 def _optional_choice(

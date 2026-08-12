@@ -111,7 +111,8 @@ class RagTests(unittest.TestCase):
         vector = _FakeVector([(baseline, 0.91)])
         result = RagService(self.index_path, vector).retrieve("剖腹产")
         self.assertEqual(result.hits[0].chunk.chunk_id, baseline)
-        self.assertEqual(result.hits[0].methods, ("exact", "vector"))
+        self.assertEqual(result.hits[0].methods, ("exact",))
+        self.assertEqual(vector.calls, 0)
 
     def test_low_confidence_vector_only_candidate_is_treated_as_no_answer(self) -> None:
         known_chunk = RagService(self.index_path).retrieve("Brimstone").hits[0].chunk.chunk_id

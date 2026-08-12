@@ -10,12 +10,15 @@ import time
 from typing import Any
 
 from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QMouseEvent
+from PySide6.QtGui import QCloseEvent, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QPushButton,
     QProgressBar,
@@ -25,13 +28,24 @@ from PySide6.QtWidgets import (
 )
 
 from .advice import AdviceEngine, AdviceResponse, StateToken
+from .audio import (
+    AudioDeviceUnavailable,
+    AudioFormat,
+    NullAudioPlayer,
+    QtAudioPlayer,
+    QtMicrophoneInput,
+    UnavailableMicrophone,
+)
 from .budget import BudgetTracker
 from .config import OriensConfig
 from .knowledge import LocalItemKnowledgeBase
 from .modeling import ModelCancelled
+from .query import QueryEngine, QueryResponse, QueryToken
 from .protocol import EventParseError, GameEvent, parse_event_line
 from .state import EventOrderError, StateStore
 from .tailer import LogTailer
+from .voice import RealtimeASR, StreamingTTS, TerminologyCorrector, Transcript, VoiceMetrics, VoiceState
+from .voice_service import VoiceCallbacks, VoiceService
 
 
 ROOM_NAMES = {
@@ -74,6 +88,15 @@ class _AdviceSignals(QObject):
     failed = Signal(str)
 
 
+class _VoiceSignals(QObject):
+    state = Signal(str, object)
+    transcript = Signal(str, object)
+    question = Signal(str, str)
+    answer = Signal(str, object, object)
+    failed = Signal(str, str)
+    metrics = Signal(str, object)
+
+
 class OverlayWindow(QMainWindow):
     def __init__(
         self,
@@ -86,6 +109,10 @@ class OverlayWindow(QMainWindow):
         from_start: bool = False,
         online_requested: bool = False,
         api_key_available: bool = False,
+        query_engine: QueryEngine | None = None,
+        asr: RealtimeASR | None = None,
+        tts: StreamingTTS | None = None,
+        voice_service: VoiceService | None = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -102,7 +129,15 @@ class OverlayWindow(QMainWindow):
         self._signals = _AdviceSignals(self)
         self._signals.completed.connect(self._show_advice)
         self._signals.failed.connect(self._show_model_error)
+        self._voice_signals = _VoiceSignals(self)
+        self._voice_signals.state.connect(self._show_voice_state)
+        self._voice_signals.transcript.connect(self._show_transcript)
+        self._voice_signals.question.connect(self._show_question)
+        self._voice_signals.answer.connect(self._show_query_answer)
+        self._voice_signals.failed.connect(self._show_voice_error)
+        self._voice_signals.metrics.connect(self._show_voice_metrics)
         self._drag_origin: QPoint | None = None
+        self.voice_service = voice_service
 
         self.setWindowTitle("Oriens：你的游戏向导")
         self.setWindowFlags(
@@ -112,8 +147,61 @@ class OverlayWindow(QMainWindow):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumWidth(440)
-        self.resize(470, 680)
+        self.resize(500, 860)
         self._build_ui()
+
+        if self.voice_service is None and query_engine is not None:
+            try:
+                microphone = QtMicrophoneInput(
+                    AudioFormat(config.audio.input_sample_rate),
+                    config.audio.chunk_duration_ms,
+                )
+                player = QtAudioPlayer(
+                    AudioFormat(config.audio.playback_sample_rate),
+                    config.audio.playback_queue_max_chunks,
+                )
+                self.voice_service = VoiceService(
+                    audio_settings=config.audio,
+                    voice_settings=config.voice,
+                    microphone=microphone,
+                    player=player,
+                    asr=asr,
+                    tts=tts,
+                    query_engine=query_engine,
+                    terminology=TerminologyCorrector.from_entities(config.rag.entities_path),
+                    state_provider=lambda: self.store.state,
+                    callbacks=VoiceCallbacks(
+                        on_state=lambda request_id, value: self._voice_signals.state.emit(request_id, value),
+                        on_transcript=lambda request_id, value: self._voice_signals.transcript.emit(request_id, value),
+                        on_question=lambda request_id, value: self._voice_signals.question.emit(request_id, value),
+                        on_answer=lambda request_id, value, token: self._voice_signals.answer.emit(request_id, value, token),
+                        on_error=lambda request_id, value: self._voice_signals.failed.emit(request_id, value),
+                        on_metrics=lambda request_id, value: self._voice_signals.metrics.emit(request_id, value),
+                    ),
+                )
+            except AudioDeviceUnavailable as exc:
+                self.voice_service = VoiceService(
+                    audio_settings=config.audio,
+                    voice_settings=config.voice,
+                    microphone=UnavailableMicrophone(),
+                    player=NullAudioPlayer(),
+                    asr=None,
+                    tts=None,
+                    query_engine=query_engine,
+                    terminology=TerminologyCorrector.from_entities(config.rag.entities_path),
+                    state_provider=lambda: self.store.state,
+                    callbacks=VoiceCallbacks(
+                        on_state=lambda request_id, value: self._voice_signals.state.emit(request_id, value),
+                        on_transcript=lambda request_id, value: self._voice_signals.transcript.emit(request_id, value),
+                        on_question=lambda request_id, value: self._voice_signals.question.emit(request_id, value),
+                        on_answer=lambda request_id, value, token: self._voice_signals.answer.emit(request_id, value, token),
+                        on_error=lambda request_id, value: self._voice_signals.failed.emit(request_id, value),
+                        on_metrics=lambda request_id, value: self._voice_signals.metrics.emit(request_id, value),
+                    ),
+                )
+                self.voice_status_label.setText("离线不可用")
+                self.voice_hint_label.setText(str(exc) + " 文字提问仍可使用。")
+        self._populate_audio_devices()
 
         if online_requested and api_key_available:
             self.mode_label.setText("在线建议已启用")
@@ -121,6 +209,15 @@ class OverlayWindow(QMainWindow):
             self.mode_label.setText("未找到 DASHSCOPE_API_KEY，已进入离线模拟模式")
         else:
             self.mode_label.setText("离线模拟模式（启动时添加 --online 可启用百炼）")
+        if self.voice_service is None or asr is None:
+            self.voice_status_label.setText("离线不可用")
+            self.ptt_button.setEnabled(False)
+            if not online_requested:
+                self.voice_hint_label.setText("语音联网默认关闭；文字提问和游戏建议仍可使用。")
+            elif not api_key_available:
+                self.voice_hint_label.setText("缺少百炼凭据时不会监听麦克风；文字提问和游戏建议仍可用。")
+            else:
+                self.voice_hint_label.setText("未找到 DASHSCOPE_WORKSPACE_ID，语音联网不可用；文字功能不受影响。")
 
         self.timer = QTimer(self)
         self.timer.setInterval(config.app.poll_interval_ms)
@@ -163,6 +260,60 @@ class OverlayWindow(QMainWindow):
         state_row.addWidget(room_card)
         state_row.addWidget(resource_card)
         layout.addLayout(state_row)
+
+        voice_frame = QFrame()
+        voice_frame.setObjectName("card")
+        voice_layout = QVBoxLayout(voice_frame)
+        voice_header = QHBoxLayout()
+        self.voice_enabled = QCheckBox("启用语音")
+        self.voice_enabled.setChecked(self.config.voice.enabled)
+        self.voice_enabled.toggled.connect(self._voice_enabled_changed)
+        self.voice_status_label = QLabel("未监听")
+        self.voice_status_label.setObjectName("status")
+        voice_header.addWidget(self.voice_enabled)
+        voice_header.addStretch(1)
+        voice_header.addWidget(self.voice_status_label)
+        voice_layout.addLayout(voice_header)
+        device_row = QHBoxLayout()
+        device_row.addWidget(QLabel("输入设备"))
+        self.input_device_combo = QComboBox()
+        self.input_device_combo.setMinimumWidth(230)
+        device_row.addWidget(self.input_device_combo, 1)
+        voice_layout.addLayout(device_row)
+        ptt_row = QHBoxLayout()
+        self.ptt_button = QPushButton(f"按住说话（{self.config.voice.push_to_talk_key}）")
+        self.ptt_button.setObjectName("primary")
+        self.ptt_button.pressed.connect(self._voice_press)
+        self.ptt_button.released.connect(self._voice_release)
+        self.cancel_voice_button = QPushButton("取消")
+        self.cancel_voice_button.clicked.connect(self._voice_cancel)
+        ptt_row.addWidget(self.ptt_button, 1)
+        ptt_row.addWidget(self.cancel_voice_button)
+        voice_layout.addLayout(ptt_row)
+        self.voice_hint_label = QLabel("默认不监听；只有按住说话时才打开麦克风。")
+        self.voice_hint_label.setObjectName("hint")
+        self.voice_hint_label.setWordWrap(True)
+        voice_layout.addWidget(self.voice_hint_label)
+        self.transcript_label = QLabel("当前字幕：—")
+        self.transcript_label.setWordWrap(True)
+        self.question_label = QLabel("最终问题：—")
+        self.question_label.setWordWrap(True)
+        voice_layout.addWidget(self.transcript_label)
+        voice_layout.addWidget(self.question_label)
+        text_row = QHBoxLayout()
+        self.question_input = QLineEdit()
+        self.question_input.setPlaceholderText("也可以键入普通游戏问题")
+        self.question_input.returnPressed.connect(self._submit_text_question)
+        self.ask_button = QPushButton("提问")
+        self.ask_button.clicked.connect(self._submit_text_question)
+        text_row.addWidget(self.question_input, 1)
+        text_row.addWidget(self.ask_button)
+        voice_layout.addLayout(text_row)
+        self.voice_metrics_label = QLabel("ASR — · RAG — · 模型 — · TTS —")
+        self.voice_metrics_label.setObjectName("metrics")
+        self.voice_metrics_label.setWordWrap(True)
+        voice_layout.addWidget(self.voice_metrics_label)
+        layout.addWidget(voice_frame)
 
         item_frame = QFrame()
         item_frame.setObjectName("card")
@@ -302,6 +453,8 @@ class OverlayWindow(QMainWindow):
         )
         if current_room != previous_room and event.type != "collectible_spawned":
             self._cancel_pending()
+            if self.voice_service is not None:
+                self.voice_service.room_changed()
         if event.type == "collectible_spawned":
             self._handle_collectible(event)
 
@@ -340,6 +493,8 @@ class OverlayWindow(QMainWindow):
         if not self.advice_engine.supports(event):
             return
         self._cancel_pending()
+        if self.voice_service is not None:
+            self.voice_service.cancel()
         self._cancel = Event()
         self.connection_label.setText("正在生成建议")
         self._future = self._executor.submit(self.advice_engine.generate, event, self._cancel)
@@ -405,6 +560,140 @@ class OverlayWindow(QMainWindow):
         )
         progress = min(1.0, cost.run_total_cny / self.budget.run_limit_cny)
         self.budget_bar.setValue(round(progress * 1000))
+        if self.voice_enabled.isChecked() and self.voice_service is not None:
+            self.voice_service.speak_validated(response.advice)
+
+    def _populate_audio_devices(self) -> None:
+        self.input_device_combo.clear()
+        if self.voice_service is None:
+            self.input_device_combo.addItem("无可用设备", None)
+            self.input_device_combo.setEnabled(False)
+            self.ptt_button.setEnabled(False)
+            return
+        devices = self.voice_service.devices()
+        if not devices:
+            self.input_device_combo.addItem("未找到麦克风", None)
+            self.ptt_button.setEnabled(False)
+            return
+        for device_id, name in devices:
+            self.input_device_combo.addItem(name, device_id)
+        self.ptt_button.setEnabled(self.voice_enabled.isChecked())
+
+    @Slot(bool)
+    def _voice_enabled_changed(self, enabled: bool) -> None:
+        if not enabled and self.voice_service is not None:
+            self.voice_service.cancel()
+        self.ptt_button.setEnabled(
+            enabled and self.voice_service is not None and self.input_device_combo.count() > 0
+            and self.input_device_combo.currentData() is not None
+        )
+
+    @Slot()
+    def _voice_press(self) -> None:
+        if not self.voice_enabled.isChecked() or self.voice_service is None:
+            self._show_voice_error("", "语音功能未启用或当前离线不可用。")
+            return
+        self._cancel_pending()
+        self.voice_service.press(self.input_device_combo.currentData())
+
+    @Slot()
+    def _voice_release(self) -> None:
+        if self.voice_service is not None:
+            self.voice_service.release()
+
+    @Slot()
+    def _voice_cancel(self) -> None:
+        if self.voice_service is not None:
+            self.voice_service.cancel()
+
+    @Slot()
+    def _submit_text_question(self) -> None:
+        text = self.question_input.text().strip()
+        if not text:
+            return
+        if self.voice_service is None:
+            self._show_voice_error("", "文本问答服务不可用。")
+            return
+        self._cancel_pending()
+        self.question_input.clear()
+        self.voice_service.ask_text(text, speak=self.voice_enabled.isChecked())
+
+    @Slot(str, object)
+    def _show_voice_state(self, request_id: str, state: VoiceState) -> None:
+        if request_id and self.voice_service is not None and not self.voice_service.is_current(request_id) and state != VoiceState.CANCELLED:
+            return
+        self.voice_status_label.setText(state.value)
+
+    @Slot(str, object)
+    def _show_transcript(self, request_id: str, transcript: Transcript) -> None:
+        if self.voice_service is not None and not self.voice_service.is_current(request_id):
+            return
+        prefix = "最终字幕" if transcript.final else "当前字幕"
+        self.transcript_label.setText(f"{prefix}：{transcript.text}")
+
+    @Slot(str, str)
+    def _show_question(self, request_id: str, question: str) -> None:
+        if self.voice_service is not None and not self.voice_service.is_current(request_id):
+            return
+        self.question_label.setText("最终问题：" + question)
+
+    @Slot(str, object, object)
+    def _show_query_answer(self, request_id: str, response: QueryResponse, token: QueryToken) -> None:
+        if self.voice_service is None or not self.voice_service.is_current(request_id):
+            return
+        if not token.is_current(self.store.state, request_id):
+            self.voice_service.cancel()
+            return
+        self.advice_label.setText(response.answer)
+        note = response.delivery_note or "回答通过本地证据和结构校验。"
+        self.reason_label.setText(note)
+        self.source_label.setText(
+            "来源：" + " · ".join(f'<a href="{item.url}">{item.title}</a>' for item in response.sources)
+        )
+        self.metrics_label.setText(
+            f"置信度 {response.confidence:.0%} · 状态序号 {response.state_seq} · "
+            f"{'离线摘要' if response.simulated else '在线模型'}"
+        )
+        self.rag_debug_label.setText(self._format_rag_debug(response))
+        self.cost_label.setText(
+            f"本次 ¥{response.cost.estimated_cost_cny:.6f} · 本局 ¥{response.cost.run_total_cny:.6f} · "
+            f"输入 {response.cost.input_tokens} · 输出 {response.cost.output_tokens} · {response.cost.model}"
+        )
+        if response.retrieval_degraded:
+            self.voice_hint_label.setText("已发生离线降级：" + (response.retrieval_degradation_reason or "关键词检索"))
+        else:
+            self.voice_hint_label.setText("本次问答使用本地混合检索，未联网搜索。")
+
+    @Slot(str, str)
+    def _show_voice_error(self, request_id: str, message: str) -> None:
+        if request_id and self.voice_service is not None and self.voice_service.is_current(request_id):
+            pass
+        self.voice_hint_label.setText(message)
+        if "仍可" not in message:
+            self.voice_status_label.setText("已取消")
+
+    @Slot(str, object)
+    def _show_voice_metrics(self, request_id: str, metrics: VoiceMetrics) -> None:
+        self.voice_metrics_label.setText(
+            f"采集 {metrics.capture_start_ms:.1f} ms · ASR 中间 {metrics.asr_first_partial_ms:.1f} ms · "
+            f"ASR 最终 {metrics.asr_final_ms:.1f} ms\nRAG {metrics.rag_ms:.1f} ms · "
+            f"模型 {metrics.model_first_text_ms:.1f} ms · TTS 首音频 {metrics.tts_first_audio_ms:.1f} ms · "
+            f"端到端 {metrics.first_audio_end_to_end_ms:.1f} ms · 打断 {metrics.interrupt_ms:.1f} ms · "
+            f"队列峰值 {metrics.queue_peak}"
+        )
+
+    @staticmethod
+    def _format_rag_debug(response: QueryResponse) -> str:
+        lines = [
+            f"{hit.chunk.entity_type}:{hit.chunk.entity_id} · {'+'.join(hit.methods)} · "
+            f"总分 {hit.score:.3f} · {hit.chunk.source.title}"
+            for hit in response.rag_hits
+        ]
+        mode = "关键词降级" if response.retrieval_degraded else "混合检索"
+        lines.append(
+            f"语料 {response.retrieval_corpus_version} · 延迟 {response.retrieval_latency_ms:.1f} ms · {mode}"
+        )
+        return "\n".join(lines)
 
     @Slot(str)
     def _show_model_error(self, message: str) -> None:
@@ -432,6 +721,8 @@ class OverlayWindow(QMainWindow):
         self.timer.stop()
         self._cancel_pending()
         self.tailer.close()
+        if self.voice_service is not None:
+            self.voice_service.close()
         if self.advice_engine.rag is not None:
             self.advice_engine.rag.close()
         self._executor.shutdown(wait=False, cancel_futures=True)
@@ -451,6 +742,32 @@ class OverlayWindow(QMainWindow):
         self._drag_origin = None
         super().mouseReleaseEvent(event)
 
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt API
+        if not event.isAutoRepeat() and self._matches_ptt_key(event):
+            self._voice_press()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt API
+        if not event.isAutoRepeat() and self._matches_ptt_key(event):
+            self._voice_release()
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    def _matches_ptt_key(self, event: QKeyEvent) -> bool:
+        configured = self.config.voice.push_to_talk_key.strip().casefold()
+        keys = {
+            "space": Qt.Key.Key_Space,
+            "f8": Qt.Key.Key_F8,
+            "f9": Qt.Key.Key_F9,
+            "f10": Qt.Key.Key_F10,
+            "f11": Qt.Key.Key_F11,
+            "f12": Qt.Key.Key_F12,
+        }
+        return configured in keys and event.key() == keys[configured]
+
 
 def run_overlay(
     *,
@@ -462,6 +779,9 @@ def run_overlay(
     from_start: bool,
     online_requested: bool,
     api_key_available: bool,
+    query_engine: QueryEngine | None = None,
+    asr: RealtimeASR | None = None,
+    tts: StreamingTTS | None = None,
 ) -> int:
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("Oriens")
@@ -475,6 +795,9 @@ def run_overlay(
         from_start=from_start,
         online_requested=online_requested,
         api_key_available=api_key_available,
+        query_engine=query_engine,
+        asr=asr,
+        tts=tts,
     )
     window.show()
     return app.exec()
@@ -509,6 +832,11 @@ QLabel#metrics { color: #83b6a4; font-size: 11px; }
 QLabel#events { color: #aebccc; font-family: Consolas, "Microsoft YaHei UI"; font-size: 11px; padding: 7px; }
 QPushButton#close { background: transparent; color: #aebccc; border: 0; font-size: 20px; width: 26px; }
 QPushButton#close:hover { color: #ffffff; background: #7b3642; border-radius: 8px; }
+QPushButton#primary { background: #3b789e; color: white; border: 0; border-radius: 7px; padding: 8px; font-weight: 700; }
+QPushButton#primary:pressed { background: #28546f; }
+QPushButton { background: #303b4b; color: #edf3ff; border: 0; border-radius: 7px; padding: 7px; }
+QComboBox, QLineEdit { background: #202936; color: #edf3ff; border: 1px solid #46566c; border-radius: 6px; padding: 6px; }
+QCheckBox { color: #edf3ff; }
 QScrollArea#eventScroll { background: rgba(20, 24, 31, 180); border: 0; border-radius: 8px; }
 QScrollArea#eventScroll > QWidget > QWidget { background: transparent; }
 QProgressBar { background: #202936; border: 0; height: 5px; border-radius: 2px; }

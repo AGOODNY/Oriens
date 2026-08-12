@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from oriens.config import load_api_key, load_config
+from oriens.config import ConfigError, load_api_key, load_config
 
 
 class ConfigTests(unittest.TestCase):
@@ -17,6 +17,15 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(provider.base_url.startswith("https://"))
         self.assertGreater(model.input_price_per_million_cny, 0)
         self.assertGreater(model.output_price_per_million_cny, 0)
+        self.assertTrue(config.voice.asr_model_id)
+        self.assertTrue(config.voice.tts_model_id)
+        self.assertIn("{workspace_id}", config.voice.asr_endpoint)
+        self.assertEqual(config.audio.input_sample_rate, 16000)
+        self.assertEqual(config.audio.input_channels, 1)
+        self.assertEqual(config.audio.playback_queue_max_chunks, 64)
+        self.assertEqual(config.voice.asr_price_per_second_cny, 0.00033)
+        self.assertEqual(config.voice.tts_price_per_10k_chars_cny, 1.0)
+        self.assertEqual(config.voice.pricing_checked_on, "2026-08-12")
 
     def test_loads_secret_from_env_file_without_mutating_environment(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -69,6 +78,22 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("rag-v2.1", str(sqlite_config.rag.chunks_path))
         self.assertEqual(sqlite_config.rag.vector_device, "cuda")
         self.assertEqual(sqlite_config.rag.vector_build_timeout_seconds, 86400)
+
+    def test_stage3_rejects_encoded_tts_for_pcm_player(self) -> None:
+        source = Path("config/default.toml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid.toml"
+            path.write_text(source.replace('tts_format = "pcm"', 'tts_format = "mp3"'), encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "仅支持 TTS 输出 PCM"):
+                load_config(path)
+
+    def test_stage3_requires_matching_tts_and_playback_rates(self) -> None:
+        source = Path("config/default.toml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid.toml"
+            path.write_text(source.replace("tts_sample_rate = 24000", "tts_sample_rate = 16000"), encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "playback_sample_rate"):
+                load_config(path)
 
 
 if __name__ == "__main__":
