@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "oriens-sidecar"
 version = "0.1.0"
-description = "Oriens 游戏日志伴侣、阶段 2 本地混合检索与阶段 3 链式语音悬浮窗"
+description = "Oriens Windows 游戏桌面伴侣、产品化运行核心与链式语音悬浮窗"
 readme = {text = "Oriens: Your In-Game Guide local sidecar", content-type = "text/plain"}
 requires-python = ">=3.11,<3.14"
 dependencies = [

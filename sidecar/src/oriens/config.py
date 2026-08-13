@@ -6,10 +6,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 import os
 from pathlib import Path
+import tempfile
 import tomllib
 from typing import Any
+
+from .paths import AppPaths
 
 
 class ConfigError(ValueError):
@@ -150,14 +154,68 @@ def repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def load_config(path: Path | None = None) -> OriensConfig:
-    root = repository_root()
-    config_path = (path or root / "config" / "default.toml").resolve()
+class ConfigService:
+    """为 CLI 与未来设置页提供统一配置加载和原子保存。"""
+
+    def __init__(
+        self,
+        paths: AppPaths,
+        *,
+        defaults_path: Path | None = None,
+        user_path: Path | None = None,
+    ) -> None:
+        self.paths = paths
+        self.defaults_path = (defaults_path or paths.default_config_file).resolve()
+        self.user_path = (user_path or paths.user_config_file).resolve()
+
+    def load(self, explicit_path: Path | None = None) -> OriensConfig:
+        raw = _read_toml(self.defaults_path, "默认配置")
+        if self.user_path.is_file():
+            user = _read_toml(self.user_path, "用户配置")
+            _validate_user_overrides(user)
+            raw = _merge(raw, user)
+        if explicit_path is not None:
+            raw = _merge(raw, _read_toml(explicit_path.resolve(), "显式配置"))
+        return _parse_config(raw, self.paths.resources)
+
+    def save_user_overrides(self, overrides: dict[str, Any]) -> None:
+        _validate_user_overrides(overrides)
+        # 合并后走完整 schema 校验，避免未来 GUI 保存出无法启动的设置。
+        combined = _merge(_read_toml(self.defaults_path, "默认配置"), overrides)
+        _parse_config(combined, self.paths.resources)
+        payload = _dump_toml(overrides)
+        self.user_path.parent.mkdir(parents=True, exist_ok=True)
+        handle, name = tempfile.mkstemp(
+            prefix=f".{self.user_path.name}.", suffix=".tmp", dir=self.user_path.parent
+        )
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as target:
+                target.write(payload)
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(name, self.user_path)
+        except Exception:
+            # 不自动删除失败暂存文件；它不影响正式配置，且便于诊断。
+            raise
+
+
+def load_config(path: Path | None = None, *, paths: AppPaths | None = None) -> OriensConfig:
+    selected_paths = paths or AppPaths.development(repository_root())
+    return ConfigService(selected_paths).load(path)
+
+
+def _read_toml(path: Path, label: str) -> dict[str, Any]:
     try:
-        with config_path.open("rb") as source:
-            raw = tomllib.load(source)
+        with path.open("rb") as source:
+            return tomllib.load(source)
     except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise ConfigError(f"无法读取配置文件：{config_path}") from exc
+        raise ConfigError(f"无法读取{label}。") from exc
+
+
+def _parse_config(raw: dict[str, Any], root: Path) -> OriensConfig:
+    _reject_unknown(raw, {
+        "app", "providers", "model_roles", "budget", "rag", "audio", "voice"
+    }, "配置")
 
     app_raw = _section(raw, "app")
     budget_raw = _section(raw, "budget")
@@ -173,6 +231,9 @@ def load_config(path: Path | None = None) -> OriensConfig:
     for name, value in _section(raw, "providers").items():
         if not isinstance(value, dict):
             raise ConfigError(f"providers.{name} 必须是对象")
+        _reject_unknown(value, {
+            "region", "base_url", "api_key_env", "timeout_seconds", "max_retries"
+        }, f"providers.{name}")
         providers[name] = ProviderSettings(
             name=name,
             region=_string(value, "region"),
@@ -186,6 +247,11 @@ def load_config(path: Path | None = None) -> OriensConfig:
     for role, value in _section(raw, "model_roles").items():
         if not isinstance(value, dict):
             raise ConfigError(f"model_roles.{role} 必须是对象")
+        _reject_unknown(value, {
+            "provider", "model_id", "display_name", "input_price_per_million_cny",
+            "output_price_per_million_cny", "pricing_input_limit_tokens",
+            "pricing_checked_on",
+        }, f"model_roles.{role}")
         roles[role] = ModelRoleSettings(
             role=role,
             provider=_string(value, "provider"),
@@ -202,10 +268,38 @@ def load_config(path: Path | None = None) -> OriensConfig:
             ),
             pricing_checked_on=_string(value, "pricing_checked_on"),
         )
+    missing_providers = sorted({role.provider for role in roles.values()} - set(providers))
+    if missing_providers:
+        raise ConfigError(f"模型角色引用了不存在的提供商：{'、'.join(missing_providers)}")
 
     budget = BudgetSettings(run_limit_cny=_positive_float(budget_raw, "run_limit_cny"))
     audio_raw = _section(raw, "audio")
     voice_raw = _section(raw, "voice")
+    _reject_unknown(app_raw, {"language", "poll_interval_ms", "recent_event_limit", "knowledge_path"}, "app")
+    _reject_unknown(budget_raw, {"run_limit_cny"}, "budget")
+    _reject_unknown(audio_raw, {
+        "input_format", "input_sample_rate", "input_channels", "input_sample_width_bytes",
+        "chunk_duration_ms", "max_recording_seconds", "min_recording_ms",
+        "silence_rms_threshold", "noise_rms_threshold", "playback_format",
+        "playback_sample_rate", "playback_channels", "playback_queue_max_chunks",
+    }, "audio")
+    _reject_unknown(voice_raw, {
+        "enabled", "push_to_talk_key", "asr_provider", "asr_model_id", "asr_endpoint",
+        "asr_language", "asr_timeout_seconds", "asr_max_retries", "asr_price_per_second_cny",
+        "tts_provider", "tts_model_id", "tts_endpoint", "tts_voice", "tts_rate", "tts_volume",
+        "tts_format", "tts_sample_rate", "tts_timeout_seconds", "tts_max_retries",
+        "tts_max_segment_chars", "tts_price_per_10k_chars_cny", "pricing_checked_on",
+        "workspace_id_env",
+    }, "voice")
+    _reject_unknown(rag_raw, {
+        "source_path", "chunks_path", "manifest_path", "index_path", "eval_path",
+        "game_version", "vector_enabled", "vector_model_id", "vector_model_path",
+        "vector_dimension", "vector_min_similarity", "vector_query_timeout_seconds",
+        "retrieval_top_k", "pipeline_version", "content_version", "raw_paths", "entities_path",
+        "redirects_path", "dependency_audit_path", "lua_facts_path", "overrides_path",
+        "vector_backend", "vector_index_path", "vector_batch_size",
+        "vector_max_sequence_length", "vector_device", "vector_build_timeout_seconds",
+    }, "rag")
     audio = AudioSettings(
         input_format=_optional_choice(audio_raw, "input_format", "pcm_s16le", {"pcm_s16le"}),
         input_sample_rate=_positive_int(audio_raw, "input_sample_rate"),
@@ -331,6 +425,67 @@ def load_config(path: Path | None = None) -> OriensConfig:
     return OriensConfig(root, app, providers, roles, budget, rag, audio, voice)
 
 
+_USER_CONFIG_ALLOWED: dict[str, frozenset[str]] = {
+    "app": frozenset({"language", "poll_interval_ms", "recent_event_limit"}),
+    "budget": frozenset({"run_limit_cny"}),
+    "audio": frozenset({
+        "input_format", "input_sample_rate", "input_channels", "input_sample_width_bytes",
+        "chunk_duration_ms", "max_recording_seconds", "min_recording_ms",
+        "silence_rms_threshold", "noise_rms_threshold", "playback_format",
+        "playback_sample_rate", "playback_channels", "playback_queue_max_chunks",
+    }),
+    "voice": frozenset({"enabled", "push_to_talk_key", "tts_voice", "tts_rate", "tts_volume"}),
+}
+
+
+def _validate_user_overrides(value: dict[str, Any]) -> None:
+    if not isinstance(value, dict):
+        raise ConfigError("用户配置必须是对象。")
+    for section, fields in value.items():
+        if section not in _USER_CONFIG_ALLOWED or not isinstance(fields, dict):
+            raise ConfigError(f"用户配置不允许修改：{section}")
+        for field in fields:
+            lowered = field.casefold()
+            secret_field = (
+                lowered in {"api_key", "secret", "token", "workspace_id"}
+                or lowered.endswith(("_api_key", "_secret", "_token", "_workspace_id"))
+            )
+            if field not in _USER_CONFIG_ALLOWED[section] or secret_field:
+                raise ConfigError(f"用户配置不允许保存敏感或受保护字段：{section}.{field}")
+
+
+def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _merge(result[key], value)
+        else:
+            result[key] = deepcopy(value)
+    return result
+
+
+def _dump_toml(value: dict[str, Any]) -> str:
+    lines: list[str] = []
+    for section in sorted(value):
+        fields = value[section]
+        lines.append(f"[{section}]")
+        for key in sorted(fields):
+            lines.append(f"{key} = {_toml_scalar(fields[key])}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _toml_scalar(value: Any) -> str:
+    if type(value) is bool:
+        return "true" if value else "false"
+    if type(value) in {int, float}:
+        return str(value)
+    if isinstance(value, str):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    raise ConfigError("用户配置包含暂不支持的值类型。")
+
+
 def load_api_key(variable_name: str, env_path: Path | None = None) -> str | None:
     """读取密钥但不记录、显示或保存在配置对象中。"""
 
@@ -366,6 +521,12 @@ def _section(value: dict[str, Any], name: str) -> dict[str, Any]:
     if not isinstance(section, dict):
         raise ConfigError(f"缺少配置段：{name}")
     return section
+
+
+def _reject_unknown(value: dict[str, Any], allowed: set[str], section: str) -> None:
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ConfigError(f"配置段 {section} 包含未知字段：{'、'.join(unknown)}")
 
 
 def _string(value: dict[str, Any], name: str) -> str:

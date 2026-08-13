@@ -14,10 +14,12 @@ import time
 from typing import TextIO
 
 from .advice import AdviceEngine
+from .application import LaunchOptions, OriensApplication, default_log_path
 from .audio import AudioChunk, AudioFormat, MemoryMicrophone, QueuedAudioPlayer
 from .budget import BudgetTracker
 from .config import ConfigError, OriensConfig, load_api_key, load_config
 from .knowledge import KnowledgeError, LocalItemKnowledgeBase
+from .knowledge_pack import KnowledgePackError
 from .modeling import ModelRouter
 from .query import QueryEngine
 from .protocol import EventParseError, GameEvent, parse_event_line
@@ -37,16 +39,7 @@ from .tailer import LogTailer
 from .voice import CosyVoiceStreamingTTS, QwenRealtimeASR, VoiceError
 from .voice import MockRealtimeASR, MockStreamingTTS, TerminologyCorrector
 from .voice_service import VoiceCallbacks, VoiceService
-
-
-def default_log_path() -> Path:
-    return (
-        Path.home()
-        / "Documents"
-        / "My Games"
-        / "Binding of Isaac Repentance+"
-        / "log.txt"
-    )
+from .paths import AppPaths
 
 
 def _json_output(value: object) -> None:
@@ -142,33 +135,6 @@ def run_replay(args: argparse.Namespace) -> int:
     return 2 if diagnostics.invalid_events or diagnostics.out_of_order_events else 0
 
 
-def _make_advice_services(
-    config_path: Path | None,
-    *,
-    online: bool,
-    enable_vector: bool = False,
-) -> tuple[OriensConfig, LocalItemKnowledgeBase, BudgetTracker, AdviceEngine, bool, ModelRouter]:
-    config = load_config(config_path)
-    provider, _model = config.provider_for("advice")
-    api_key = load_api_key(provider.api_key_env)
-    router = ModelRouter(config, online=online, api_key=api_key)
-    knowledge = LocalItemKnowledgeBase.load(config.app.knowledge_path)
-    _ensure_rag_index(config)
-    vector = _make_vector_client(config) if enable_vector else None
-    if vector is not None:
-        vector.start()
-    rag = RagService(
-        config.rag.index_path,
-        vector,
-        vector_min_similarity=config.rag.vector_min_similarity,
-    )
-    budget = BudgetTracker(config.budget.run_limit_cny)
-    engine = AdviceEngine(
-        knowledge, router, budget, rag=rag, game_version=config.rag.game_version
-    )
-    return config, knowledge, budget, engine, bool(api_key), router
-
-
 def _ensure_rag_index(config: OriensConfig) -> None:
     if config.rag.pipeline_version == 2:
         if not config.rag.index_path.is_file():
@@ -222,18 +188,23 @@ def _demo_event(collectible_id: int, seq: int = 1) -> GameEvent:
 
 
 def run_advice_demo(args: argparse.Namespace) -> int:
+    application = None
     try:
-        _config, knowledge, budget, engine, _key_available, _router = _make_advice_services(
-            args.config, online=False
+        application = OriensApplication.build(
+            AppPaths.development(),
+            LaunchOptions(config_path=args.config, online=False, enable_vector=False),
         )
-        if knowledge.find(args.collectible_id) is None:
+        if application.knowledge.find(args.collectible_id) is None:
             print(f"本地资料未覆盖道具 ID：{args.collectible_id}", file=sys.stderr)
             return 1
-        budget.set_run("ORIENS DEMO:0")
-        response, _token = engine.generate(_demo_event(args.collectible_id))
-    except (ConfigError, KnowledgeError, RagError, CorpusValidationError) as exc:
+        application.budget.set_run("ORIENS DEMO:0")
+        response, _token = application.advice_engine.generate(_demo_event(args.collectible_id))
+    except (ConfigError, KnowledgeError, KnowledgePackError, RagError, CorpusValidationError) as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
         return 1
+    finally:
+        if application is not None:
+            application.close()
     _json_output(response.as_dict())
     return 0
 
@@ -245,70 +216,62 @@ def run_api_smoke(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    application = None
     try:
-        config, knowledge, budget, engine, key_available, _router = _make_advice_services(
-            args.config, online=True
+        application = OriensApplication.build(
+            AppPaths.development(),
+            LaunchOptions(config_path=args.config, online=True, enable_vector=False),
         )
-        if not key_available:
+        if not application.api_key_available:
             print("未找到 DASHSCOPE_API_KEY，未发起联网请求。", file=sys.stderr)
             return 1
-        if knowledge.find(args.collectible_id) is None:
+        if application.knowledge.find(args.collectible_id) is None:
             print(f"本地资料未覆盖道具 ID：{args.collectible_id}", file=sys.stderr)
             return 1
-        _provider, model = config.provider_for("advice")
+        _provider, model = application.config.provider_for("advice")
         print(
             f"将调用 {model.display_name} 一次；预计 5–15 秒，通常费用低于人民币 0.001 元。"
         )
-        budget.set_run("ORIENS API SMOKE:0")
-        response, _token = engine.generate(_demo_event(args.collectible_id))
-    except (ConfigError, KnowledgeError, RagError, CorpusValidationError) as exc:
+        application.budget.set_run("ORIENS API SMOKE:0")
+        response, _token = application.advice_engine.generate(_demo_event(args.collectible_id))
+    except (ConfigError, KnowledgeError, KnowledgePackError, RagError, CorpusValidationError) as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
         return 1
+    finally:
+        if application is not None:
+            application.close()
     _json_output(response.as_dict())
     return 0 if not response.simulated else 2
 
 
 def run_ui(args: argparse.Namespace) -> int:
     try:
-        config, knowledge, budget, engine, key_available, router = _make_advice_services(
-            args.config, online=args.online, enable_vector=True
+        application = OriensApplication.build(
+            AppPaths.development(),
+            LaunchOptions(
+                config_path=args.config,
+                log_path=args.log,
+                from_start=args.from_start,
+                online=args.online,
+                enable_vector=True,
+            ),
         )
-    except (ConfigError, KnowledgeError, RagError, CorpusValidationError) as exc:
+    except (ConfigError, KnowledgeError, KnowledgePackError, RagError, CorpusValidationError) as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
         return 1
     try:
         from .ui import run_overlay
     except ImportError:
+        application.close()
         print(
             "缺少 PySide6。请按 README 的项目内虚拟环境步骤安装依赖。",
             file=sys.stderr,
         )
         return 1
-    assert engine.rag is not None
-    query_engine = QueryEngine(
-        engine.rag, router, budget, game_version=config.rag.game_version
-    )
-    provider, _model = config.provider_for("advice")
-    api_key = load_api_key(provider.api_key_env)
-    workspace_id = load_api_key(config.voice.workspace_id_env)
-    asr = None
-    tts = None
-    if args.online and api_key and workspace_id:
-        asr = QwenRealtimeASR(config.voice, config.audio, api_key, workspace_id)
-        tts = CosyVoiceStreamingTTS(config.voice, api_key, workspace_id)
-    return run_overlay(
-        config=config,
-        log_path=args.log.resolve(),
-        knowledge=knowledge,
-        advice_engine=engine,
-        budget=budget,
-        from_start=args.from_start,
-        online_requested=args.online,
-        api_key_available=key_available,
-        query_engine=query_engine,
-        asr=asr,
-        tts=tts,
-    )
+    try:
+        return run_overlay(application=application)
+    finally:
+        application.close()
 
 
 def run_voice_benchmark(args: argparse.Namespace) -> int:
@@ -318,15 +281,16 @@ def run_voice_benchmark(args: argparse.Namespace) -> int:
         print("模拟语音基准参数必须为正数", file=sys.stderr)
         return 1
 
+    application = None
     try:
-        config, _knowledge, budget, engine, _key, router = _make_advice_services(
-            args.config, online=False, enable_vector=True
+        application = OriensApplication.build(
+            AppPaths.development(),
+            LaunchOptions(config_path=args.config, online=False, enable_vector=True),
         )
-        assert engine.rag is not None
-        query = QueryEngine(
-            engine.rag, router, budget, game_version=config.rag.game_version
-        )
-    except (ConfigError, KnowledgeError, RagError, CorpusValidationError) as exc:
+        config = application.config
+        budget = application.budget
+        query = application.query_engine
+    except (ConfigError, KnowledgeError, KnowledgePackError, RagError, CorpusValidationError) as exc:
         print(f"启动失败：{exc}", file=sys.stderr)
         return 1
 
@@ -405,7 +369,7 @@ def run_voice_benchmark(args: argparse.Namespace) -> int:
         report = {
             "mode": "simulation",
             "network_calls": 0,
-            "config": str((args.config or Path("config/default.toml")).resolve()),
+            "config_source": "explicit" if args.config else "default",
             "corpus_version": config.rag.content_version,
             "vector_backend": config.rag.vector_backend,
             "iterations": args.iterations,
@@ -430,7 +394,8 @@ def run_voice_benchmark(args: argparse.Namespace) -> int:
         return 1
     finally:
         service.close()
-        engine.rag.close()
+        if application is not None:
+            application.close()
 
 
 def run_voice_api_smoke(args: argparse.Namespace) -> int:

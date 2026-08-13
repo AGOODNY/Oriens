@@ -15,10 +15,12 @@ except ImportError:  # 阶段 0 的无依赖解释器仍可运行其余测试。
     QApplication = None  # type: ignore[assignment]
 
 from oriens.advice import AdviceEngine
+from oriens.application import LaunchOptions, OriensApplication
 from oriens.budget import BudgetTracker
 from oriens.config import load_config
 from oriens.knowledge import LocalItemKnowledgeBase
 from oriens.modeling import ModelRouter
+from oriens.paths import AppPaths
 from oriens.protocol import GameEvent
 from oriens.voice import VoiceState
 
@@ -40,20 +42,18 @@ class OverlayTests(unittest.TestCase):
         from oriens.ui import OverlayWindow
 
         app = QApplication.instance() or QApplication([])
-        config = load_config()
-        knowledge = LocalItemKnowledgeBase.load(config.app.knowledge_path)
-        budget = BudgetTracker(config.budget.run_limit_cny)
-        router = ModelRouter(config, online=False, api_key=None)
-        engine = AdviceEngine(knowledge, router, budget)
         with tempfile.TemporaryDirectory() as directory:
+            application = OriensApplication.build(
+                AppPaths.development(),
+                LaunchOptions(
+                    config_path=Path("config/rag-v2.1-faiss.toml"),
+                    log_path=Path(directory) / "missing.log",
+                    online=False,
+                    enable_vector=False,
+                ),
+            )
             window = OverlayWindow(
-                config=config,
-                log_path=Path(directory) / "missing.log",
-                knowledge=knowledge,
-                advice_engine=engine,
-                budget=budget,
-                online_requested=False,
-                api_key_available=False,
+                application=application,
             )
             window.show()
             app.processEvents()
@@ -137,7 +137,7 @@ class OverlayTests(unittest.TestCase):
             app.processEvents()
             self.assertIn("剧毒休克", window.item_label.text())
             self.assertIn("值得拿", window.advice_label.text())
-            self.assertIn("Toxic Shock", window.source_label.text())
+            self.assertIn("href=", window.source_label.text())
             self.assertIn("color:#b9e5ff", window.source_label.text())
             self.assertIn("¥0.000000", window.cost_label.text())
             assert window._future is not None
@@ -182,15 +182,19 @@ class OverlayTests(unittest.TestCase):
             def close(self): self.closed = True
 
         app = QApplication.instance() or QApplication([])
-        config = load_config()
-        knowledge = LocalItemKnowledgeBase.load(config.app.knowledge_path)
-        budget = BudgetTracker(config.budget.run_limit_cny)
-        engine = AdviceEngine(knowledge, ModelRouter(config, online=False, api_key=None), budget)
         fake = FakeVoiceService()
         with tempfile.TemporaryDirectory() as directory:
+            application = OriensApplication.build(
+                AppPaths.development(),
+                LaunchOptions(
+                    config_path=Path("config/rag-v2.1-faiss.toml"),
+                    log_path=Path(directory) / "missing.log",
+                    online=False,
+                    enable_vector=False,
+                ),
+            )
             window = OverlayWindow(
-                config=config, log_path=Path(directory) / "missing.log",
-                knowledge=knowledge, advice_engine=engine, budget=budget,
+                application=application,
                 voice_service=fake,
             )
             self.assertEqual(window.input_device_combo.count(), 1)

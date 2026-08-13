@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from html import escape
-from pathlib import Path
 from threading import Event
 import time
 from typing import Any
@@ -29,24 +28,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .advice import AdviceEngine, AdviceResponse, StateToken
-from .audio import (
-    AudioDeviceUnavailable,
-    AudioFormat,
-    NullAudioPlayer,
-    QtAudioPlayer,
-    QtMicrophoneInput,
-    UnavailableMicrophone,
-)
-from .budget import BudgetTracker
-from .config import OriensConfig
-from .knowledge import LocalItemKnowledgeBase
+from .advice import AdviceResponse, StateToken
+from .application import OriensApplication
 from .modeling import ModelCancelled
-from .query import QueryEngine, QueryResponse, QueryToken
+from .query import QueryResponse, QueryToken
 from .protocol import EventParseError, GameEvent, parse_event_line
-from .state import EventOrderError, StateStore
-from .tailer import LogTailer
-from .voice import RealtimeASR, StreamingTTS, TerminologyCorrector, Transcript, VoiceMetrics, VoiceState
+from .state import EventOrderError
+from .voice import Transcript, VoiceMetrics, VoiceState
 from .voice_service import VoiceCallbacks, VoiceService
 
 
@@ -136,27 +124,18 @@ class OverlayWindow(QMainWindow):
     def __init__(
         self,
         *,
-        config: OriensConfig,
-        log_path: Path,
-        knowledge: LocalItemKnowledgeBase,
-        advice_engine: AdviceEngine,
-        budget: BudgetTracker,
-        from_start: bool = False,
-        online_requested: bool = False,
-        api_key_available: bool = False,
-        query_engine: QueryEngine | None = None,
-        asr: RealtimeASR | None = None,
-        tts: StreamingTTS | None = None,
+        application: OriensApplication,
         voice_service: VoiceService | None = None,
     ) -> None:
         super().__init__()
-        self.config = config
-        self.knowledge = knowledge
-        self.advice_engine = advice_engine
-        self.budget = budget
-        self.tailer = LogTailer(log_path, from_start=from_start)
-        self.store = StateStore()
-        self._recent: deque[str] = deque(maxlen=config.app.recent_event_limit)
+        self.application = application
+        self.config = application.config
+        self.knowledge = application.knowledge
+        self.advice_engine = application.advice_engine
+        self.budget = application.budget
+        self.tailer = application.tailer
+        self.store = application.session
+        self._recent: deque[str] = deque(maxlen=self.config.app.recent_event_limit)
         self._last_event_at: float | None = None
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="oriens-model")
         self._cancel: Event | None = None
@@ -176,6 +155,7 @@ class OverlayWindow(QMainWindow):
         self._normal_size = None
         self._compact_hidden_widgets: list[QWidget] = []
         self.voice_service = voice_service
+        self._injected_voice_service = voice_service is not None
 
         self.setWindowTitle("Oriens：你的游戏向导")
         self.setWindowFlags(
@@ -188,77 +168,44 @@ class OverlayWindow(QMainWindow):
         self.resize(500, 860)
         self._build_ui()
 
-        if self.voice_service is None and query_engine is not None:
-            try:
-                microphone = QtMicrophoneInput(
-                    AudioFormat(config.audio.input_sample_rate),
-                    config.audio.chunk_duration_ms,
+        asr_available = False
+        unavailable_reason = None
+        if self.voice_service is None:
+            assembled = application.create_voice_service(
+                VoiceCallbacks(
+                    on_state=lambda request_id, value: self._voice_signals.state.emit(request_id, value),
+                    on_transcript=lambda request_id, value: self._voice_signals.transcript.emit(request_id, value),
+                    on_question=lambda request_id, value: self._voice_signals.question.emit(request_id, value),
+                    on_answer=lambda request_id, value, token: self._voice_signals.answer.emit(request_id, value, token),
+                    on_error=lambda request_id, value: self._voice_signals.failed.emit(request_id, value),
+                    on_metrics=lambda request_id, value: self._voice_signals.metrics.emit(request_id, value),
                 )
-                player = QtAudioPlayer(
-                    AudioFormat(config.audio.playback_sample_rate),
-                    config.audio.playback_queue_max_chunks,
-                )
-                self.voice_service = VoiceService(
-                    audio_settings=config.audio,
-                    voice_settings=config.voice,
-                    microphone=microphone,
-                    player=player,
-                    asr=asr,
-                    tts=tts,
-                    query_engine=query_engine,
-                    terminology=TerminologyCorrector.from_entities(config.rag.entities_path),
-                    state_provider=lambda: self.store.state,
-                    callbacks=VoiceCallbacks(
-                        on_state=lambda request_id, value: self._voice_signals.state.emit(request_id, value),
-                        on_transcript=lambda request_id, value: self._voice_signals.transcript.emit(request_id, value),
-                        on_question=lambda request_id, value: self._voice_signals.question.emit(request_id, value),
-                        on_answer=lambda request_id, value, token: self._voice_signals.answer.emit(request_id, value, token),
-                        on_error=lambda request_id, value: self._voice_signals.failed.emit(request_id, value),
-                        on_metrics=lambda request_id, value: self._voice_signals.metrics.emit(request_id, value),
-                    ),
-                )
-            except AudioDeviceUnavailable as exc:
-                self.voice_service = VoiceService(
-                    audio_settings=config.audio,
-                    voice_settings=config.voice,
-                    microphone=UnavailableMicrophone(),
-                    player=NullAudioPlayer(),
-                    asr=None,
-                    tts=None,
-                    query_engine=query_engine,
-                    terminology=TerminologyCorrector.from_entities(config.rag.entities_path),
-                    state_provider=lambda: self.store.state,
-                    callbacks=VoiceCallbacks(
-                        on_state=lambda request_id, value: self._voice_signals.state.emit(request_id, value),
-                        on_transcript=lambda request_id, value: self._voice_signals.transcript.emit(request_id, value),
-                        on_question=lambda request_id, value: self._voice_signals.question.emit(request_id, value),
-                        on_answer=lambda request_id, value, token: self._voice_signals.answer.emit(request_id, value, token),
-                        on_error=lambda request_id, value: self._voice_signals.failed.emit(request_id, value),
-                        on_metrics=lambda request_id, value: self._voice_signals.metrics.emit(request_id, value),
-                    ),
-                )
-                self.voice_status_label.setText("离线不可用")
-                self.voice_hint_label.setText(str(exc) + " 文字提问仍可使用。")
+            )
+            self.voice_service = assembled.service
+            asr_available = assembled.asr_available
+            unavailable_reason = assembled.unavailable_reason
         self._populate_audio_devices()
 
-        if online_requested and api_key_available:
+        if application.options.online and application.api_key_available:
             self.mode_label.setText("在线建议已启用")
-        elif online_requested:
+        elif application.options.online:
             self.mode_label.setText("未找到 DASHSCOPE_API_KEY，已进入离线模拟模式")
         else:
             self.mode_label.setText("离线模拟模式（启动时添加 --online 可启用百炼）")
-        if self.voice_service is None or asr is None:
+        if not asr_available:
             self.voice_status_label.setText("离线不可用")
             self.ptt_button.setEnabled(False)
-            if not online_requested:
+            if unavailable_reason:
+                self.voice_hint_label.setText(unavailable_reason)
+            elif not application.options.online:
                 self.voice_hint_label.setText("语音联网默认关闭；文字提问和游戏建议仍可使用。")
-            elif not api_key_available:
+            elif not application.api_key_available:
                 self.voice_hint_label.setText("缺少百炼凭据时不会监听麦克风；文字提问和游戏建议仍可用。")
             else:
                 self.voice_hint_label.setText("未找到 DASHSCOPE_WORKSPACE_ID，语音联网不可用；文字功能不受影响。")
 
         self.timer = QTimer(self)
-        self.timer.setInterval(config.app.poll_interval_ms)
+        self.timer.setInterval(self.config.app.poll_interval_ms)
         self.timer.timeout.connect(self._poll_log)
         self.timer.start()
 
@@ -872,11 +819,9 @@ class OverlayWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API
         self.timer.stop()
         self._cancel_pending()
-        self.tailer.close()
-        if self.voice_service is not None:
+        self.application.close()
+        if self._injected_voice_service and self.voice_service is not None:
             self.voice_service.close()
-        if self.advice_engine.rag is not None:
-            self.advice_engine.rag.close()
         self._executor.shutdown(wait=False, cancel_futures=True)
         event.accept()
 
@@ -923,33 +868,13 @@ class OverlayWindow(QMainWindow):
 
 def run_overlay(
     *,
-    config: OriensConfig,
-    log_path: Path,
-    knowledge: LocalItemKnowledgeBase,
-    advice_engine: AdviceEngine,
-    budget: BudgetTracker,
-    from_start: bool,
-    online_requested: bool,
-    api_key_available: bool,
-    query_engine: QueryEngine | None = None,
-    asr: RealtimeASR | None = None,
-    tts: StreamingTTS | None = None,
+    application: OriensApplication,
 ) -> int:
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("Oriens")
     app.setApplicationDisplayName("Oriens：你的游戏向导")
     window = OverlayWindow(
-        config=config,
-        log_path=log_path,
-        knowledge=knowledge,
-        advice_engine=advice_engine,
-        budget=budget,
-        from_start=from_start,
-        online_requested=online_requested,
-        api_key_available=api_key_available,
-        query_engine=query_engine,
-        asr=asr,
-        tts=tts,
+        application=application,
     )
     window.show()
     return app.exec()
