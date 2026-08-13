@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+import re
 from threading import Event
 from typing import Any
 
 from .budget import BudgetTracker, CostInfo
 from .knowledge import Source
 from .modeling import ModelCancelled, ModelError, ModelRequest, ModelRouter
-from .rag import RagFilters, RagHit, RagResult, RagService
+from .rag import RagChunk, RagFilters, RagHit, RagResult, RagService
 from .state import GameState
 
 
@@ -19,6 +20,10 @@ class QueryError(RuntimeError):
 
 
 class QueryValidationError(QueryError):
+    pass
+
+
+class StateClaimValidationError(QueryValidationError):
     pass
 
 
@@ -112,8 +117,10 @@ class QueryEngine:
         if len(text) > 300:
             raise QueryError("问题过长，请缩短后重试")
         token = QueryToken.from_state(request_id, state)
+        subject = self._resolve_question_subject(text, state)
+        retrieval_query = subject["entity_id"] if subject is not None else text
         result = self.rag.retrieve(
-            text,
+            retrieval_query,
             filters=RagFilters(game_version=self.game_version),
             top_k=5,
         )
@@ -122,13 +129,15 @@ class QueryEngine:
         if result.no_answer:
             raise QueryError("本地资料不足，无法可靠回答这个问题。")
         sources = _sources_from_result(result)
+        resolved_players = self._resolve_players(state.players)
         context = {
             "question": text,
+            "question_subject": subject,
             "game_state": {
                 "run_id": state.run_id,
                 "state_seq": state.last_seq,
                 "context": dict(state.context),
-                "players": dict(state.players),
+                "players": resolved_players,
             },
             "evidence": [
                 {
@@ -146,6 +155,9 @@ class QueryEngine:
         fallback = _fallback_answer(result)
         request = ModelRequest(
             "你是 Oriens 游戏助手。仅依据本次提供的本地检索证据，用简体中文回答玩家问题。"
+            "question_subject 与 game_state.players 中的 resolved_identity 均为程序依据稳定 ID "
+            "从本地索引解析出的可信事实；提到对应角色或道具时必须原样使用其中的名称，"
+            "不得根据数字 ID 猜测、翻译或改名。"
             "必须输出字段严格为 advice、reason、confidence、sources、state_seq 的 JSON 对象；"
             "advice 是不超过 120 字的直接回答，reason 是不超过 160 字的证据说明。"
             "不得使用外部知识或编造来源。",
@@ -158,6 +170,7 @@ class QueryEngine:
             },
         )
         note: str | None = None
+        billed_route = None
         if self.router.online and not self.budget.can_call_online():
             routed = self.router.complete_offline(self.MODEL_ROLE, request, cancel_event)
             note = "本局预算上限已达到，已使用本地证据摘要。"
@@ -174,8 +187,24 @@ class QueryEngine:
             expected_state_seq=state.last_seq,
             allowed_sources={item.id for item in sources},
         )
+        try:
+            _validate_state_claims(draft[0], resolved_players)
+        except StateClaimValidationError:
+            if routed.simulated:
+                raise
+            billed_route = routed
+            routed = self.router.complete_offline(self.MODEL_ROLE, request, cancel_event)
+            draft = _validate_query_json(
+                routed.content,
+                expected_state_seq=state.last_seq,
+                allowed_sources={item.id for item in sources},
+            )
+            note = "网络模型回答未通过本地游戏状态校验，已使用本地证据摘要。"
         source_map = {item.id: item for item in sources}
-        cost = self.budget.record(routed.display_name, routed.usage, routed.model)
+        cost_route = billed_route or routed
+        cost = self.budget.record(
+            cost_route.display_name, cost_route.usage, cost_route.model
+        )
         response = QueryResponse(
             answer=draft[0],
             confidence=draft[1],
@@ -191,6 +220,47 @@ class QueryEngine:
             retrieval_degradation_reason=result.degradation_reason,
         )
         return response, token
+
+    def _resolve_question_subject(
+        self, question: str, state: GameState
+    ) -> dict[str, Any] | None:
+        if not _references_current_room_item(question):
+            return None
+        collectible_id = _latest_room_collectible_id(state)
+        if collectible_id is None:
+            raise QueryError("当前房间没有可确认的道具，请在问题中说出道具名称。")
+        descriptor = self.rag.describe_entity("item", f"collectible:{collectible_id}")
+        if descriptor is None:
+            raise QueryError(f"当前道具 ID {collectible_id} 暂无本地资料，无法可靠回答。")
+        return {
+            "kind": "current_room_collectible",
+            **_resolved_identity(descriptor),
+        }
+
+    def _resolve_players(
+        self, players: dict[str, dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        resolved: dict[str, dict[str, Any]] = {}
+        for key, raw_player in players.items():
+            player = dict(raw_player)
+            player_type = player.get("player_type")
+            if type(player_type) is int:
+                descriptor = self.rag.describe_entity("character", f"player:{player_type}")
+                if descriptor is not None:
+                    player["resolved_identity"] = _resolved_identity(descriptor)
+            inventory = player.get("inventory")
+            if isinstance(inventory, dict):
+                inventory = dict(inventory)
+                active_item = inventory.get("active_item")
+                if type(active_item) is int and active_item > 0:
+                    descriptor = self.rag.describe_entity(
+                        "item", f"collectible:{active_item}"
+                    )
+                    if descriptor is not None:
+                        inventory["resolved_active_item"] = _resolved_identity(descriptor)
+                player["inventory"] = inventory
+            resolved[key] = player
+        return resolved
 
 
 def _validate_query_json(
@@ -245,3 +315,74 @@ def _fallback_answer(result: RagResult) -> str:
 
 def _optional_int(value: Any) -> int | None:
     return value if type(value) is int else None
+
+
+def _references_current_room_item(question: str) -> bool:
+    normalized = "".join(question.lower().split())
+    return any(
+        phrase in normalized
+        for phrase in (
+            "这个道具",
+            "这件道具",
+            "这个物品",
+            "这件物品",
+            "眼前的道具",
+            "当前房间的道具",
+            "面前的道具",
+        )
+    )
+
+
+def _latest_room_collectible_id(state: GameState) -> int | None:
+    for item in reversed(state.room_collectibles):
+        collectible_id = item.get("collectible_id")
+        if not item.get("taken") and type(collectible_id) is int and collectible_id > 0:
+            return collectible_id
+    return None
+
+
+def _resolved_identity(chunk: RagChunk) -> dict[str, str]:
+    return {
+        "entity_id": chunk.entity_id,
+        "name_zh": chunk.name_zh,
+        "name_en": chunk.name_en,
+    }
+
+
+def _validate_state_claims(
+    answer: str, resolved_players: dict[str, dict[str, Any]]
+) -> None:
+    if not resolved_players:
+        return
+    player = resolved_players[sorted(resolved_players)[0]]
+    identity = player.get("resolved_identity")
+    if isinstance(identity, dict):
+        _validate_named_claim(
+            answer,
+            r"当前角色(?:是|为)\s*([^，。；：:（(]+)",
+            identity.get("name_zh"),
+            "角色",
+        )
+    inventory = player.get("inventory")
+    if isinstance(inventory, dict):
+        active = inventory.get("resolved_active_item")
+        if isinstance(active, dict):
+            _validate_named_claim(
+                answer,
+                r"(?:持有|携带)(?:的)?主动道具(?:是|为)?\s*([^，。；：:（(]+)",
+                active.get("name_zh"),
+                "主动道具",
+            )
+
+
+def _validate_named_claim(
+    answer: str, pattern: str, expected_name: Any, field_name: str
+) -> None:
+    if not isinstance(expected_name, str) or not expected_name:
+        return
+    for match in re.finditer(pattern, answer):
+        claimed = match.group(1).strip().rstrip("，。；：:")
+        if claimed != expected_name:
+            raise StateClaimValidationError(
+                f"回答中的{field_name}名称与本地稳定 ID 不一致"
+            )
