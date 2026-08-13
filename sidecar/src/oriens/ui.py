@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from html import escape
 from threading import Event
 import time
@@ -32,8 +32,7 @@ from .advice import AdviceResponse, StateToken
 from .application import OriensApplication
 from .modeling import ModelCancelled
 from .query import QueryResponse, QueryToken
-from .protocol import EventParseError, GameEvent, parse_event_line
-from .state import EventOrderError
+from .protocol import GameEvent
 from .voice import Transcript, VoiceMetrics, VoiceState
 from .voice_service import VoiceCallbacks, VoiceService
 
@@ -126,6 +125,7 @@ class OverlayWindow(QMainWindow):
         *,
         application: OriensApplication,
         voice_service: VoiceService | None = None,
+        auto_poll: bool = True,
     ) -> None:
         super().__init__()
         self.application = application
@@ -137,7 +137,6 @@ class OverlayWindow(QMainWindow):
         self.store = application.session
         self._recent: deque[str] = deque(maxlen=self.config.app.recent_event_limit)
         self._last_event_at: float | None = None
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="oriens-model")
         self._cancel: Event | None = None
         self._future: Future[tuple[AdviceResponse, StateToken]] | None = None
         self._signals = _AdviceSignals(self)
@@ -154,6 +153,7 @@ class OverlayWindow(QMainWindow):
         self._compact_mode = False
         self._normal_size = None
         self._compact_hidden_widgets: list[QWidget] = []
+        self._allow_close = False
         self.voice_service = voice_service
         self._injected_voice_service = voice_service is not None
 
@@ -207,7 +207,8 @@ class OverlayWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.setInterval(self.config.app.poll_interval_ms)
         self.timer.timeout.connect(self._poll_log)
-        self.timer.start()
+        if auto_poll:
+            self.timer.start()
 
     def _build_ui(self) -> None:
         shell = QFrame()
@@ -483,48 +484,23 @@ class OverlayWindow(QMainWindow):
 
     @Slot()
     def _poll_log(self) -> None:
-        try:
-            poll = self.tailer.poll()
-        except OSError:
-            self.connection_label.setText("日志不可读")
-            return
-        if poll.reopened:
-            self.store.diagnostics.log_reopens += 1
-        for line in poll.lines:
-            self._handle_line(line)
+        for event in self.application.poll_events():
+            self.handle_event(event)
         self._update_connection()
 
     def _handle_line(self, line: str) -> None:
-        try:
-            event = parse_event_line(line)
-        except EventParseError:
-            self.store.mark_invalid()
-            return
+        event = self.application.process_log_line(line)
         if event is None:
-            self.store.mark_ignored()
             return
-        previous_room = (
-            self.store.state.context.get("room_index"),
-            self.store.state.context.get("room_spawn_seed"),
-        )
-        try:
-            self.store.apply(event)
-        except EventOrderError:
-            return
+        self.handle_event(event)
+
+    def handle_event(self, event: GameEvent) -> None:
         self._last_event_at = time.monotonic()
-        self.budget.set_run(self.store.state.run_id)
         self._recent.appendleft(f"#{event.seq}  {event.type}")
         self.events_label.setText("\n".join(self._recent))
         self._update_state(event)
-
-        current_room = (
-            self.store.state.context.get("room_index"),
-            self.store.state.context.get("room_spawn_seed"),
-        )
-        if current_room != previous_room and event.type != "collectible_spawned":
+        if event.type in {"room_entered", "floor_changed", "run_started", "run_ended"}:
             self._cancel_pending()
-            if self.voice_service is not None:
-                self.voice_service.room_changed()
         if event.type == "collectible_spawned":
             self._handle_collectible(event)
 
@@ -568,7 +544,7 @@ class OverlayWindow(QMainWindow):
         self._cancel = Event()
         self.connection_label.setText("正在生成建议")
         self._start_thinking()
-        self._future = self._executor.submit(self.advice_engine.generate, event, self._cancel)
+        self._future = self.application.submit_advice(event, self._cancel)
         self._future.add_done_callback(self._on_advice_done)
 
     def _on_advice_done(self, future: Future[tuple[AdviceResponse, StateToken]]) -> None:
@@ -808,22 +784,30 @@ class OverlayWindow(QMainWindow):
             self.metrics_label.show()
 
     def _update_connection(self) -> None:
-        if self._last_event_at is None:
-            self.connection_label.setText("等待游戏事件")
-            return
-        if time.monotonic() - self._last_event_at > 3:
-            self.connection_label.setText("日志已连接，等待新事件")
-        elif self.connection_label.text() not in {"正在生成建议", "建议已就绪"}:
-            self.connection_label.setText("游戏已连接")
+        if self.connection_label.text() not in {"正在生成建议", "建议已就绪"}:
+            self.connection_label.setText(self.application.runtime_snapshot().log_connection)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API
+        if not self._allow_close:
+            self.suspend_interaction()
+            self.hide()
+            event.ignore()
+            return
         self.timer.stop()
         self._cancel_pending()
-        self.application.close()
         if self._injected_voice_service and self.voice_service is not None:
             self.voice_service.close()
-        self._executor.shutdown(wait=False, cancel_futures=True)
         event.accept()
+
+    def prepare_shutdown(self) -> None:
+        self._allow_close = True
+        self.timer.stop()
+        self.suspend_interaction()
+
+    def suspend_interaction(self) -> None:
+        self._cancel_pending()
+        if self.voice_service is not None:
+            self.voice_service.cancel()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
         if event.button() == Qt.MouseButton.LeftButton:
@@ -870,14 +854,11 @@ def run_overlay(
     *,
     application: OriensApplication,
 ) -> int:
-    app = QApplication.instance() or QApplication([])
-    app.setApplicationName("Oriens")
-    app.setApplicationDisplayName("Oriens：你的游戏向导")
-    window = OverlayWindow(
-        application=application,
-    )
-    window.show()
-    return app.exec()
+    """兼容旧内部调用；阶段 3.6 统一进入桌面产品外壳。"""
+
+    from .desktop import run_desktop
+
+    return run_desktop(application=application)
 
 
 def _half_hearts(value: Any) -> str:

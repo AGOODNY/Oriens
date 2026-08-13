@@ -165,7 +165,7 @@ class OverlayTests(unittest.TestCase):
             app.processEvents()
             self.assertFalse(window.isVisible())
 
-    def test_injected_voice_service_is_closed_with_window(self) -> None:
+    def test_injected_voice_service_survives_hide_and_closes_on_shutdown(self) -> None:
         assert QApplication is not None
         from oriens.ui import OverlayWindow
 
@@ -204,7 +204,14 @@ class OverlayTests(unittest.TestCase):
             self.assertEqual(fake.pressed, 1)
             window.close()
             app.processEvents()
+            self.assertFalse(fake.closed)
+            self.assertFalse(window.isVisible())
+            window.show()
+            window.prepare_shutdown()
+            window.close()
+            app.processEvents()
             self.assertTrue(fake.closed)
+            application.close()
 
 
 if __name__ == "__main__":

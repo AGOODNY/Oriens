@@ -6,7 +6,12 @@ import json
 import tempfile
 import unittest
 
-from oriens.application import LaunchOptions, OriensApplication, _config_for_pack
+from oriens.application import (
+    LaunchOptions,
+    ListeningState,
+    OriensApplication,
+    _config_for_pack,
+)
 from oriens.config import load_config
 from oriens.knowledge_pack import KnowledgePackManager
 from oriens.memory import NullMemoryStore
@@ -33,6 +38,47 @@ class ApplicationAssemblyTests(unittest.TestCase):
             self.assertFalse(application.router.online)
             self.assertFalse(application.memory.enabled)
             application.close()
+            application.close()
+
+    def test_pause_discards_new_lines_and_resume_continues_safely(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "game.log"
+            log.write_text("", encoding="utf-8")
+            application = OriensApplication.build(
+                AppPaths.development(),
+                LaunchOptions(
+                    config_path=Path("config/rag-v2.1-faiss.toml"),
+                    log_path=log,
+                    from_start=True,
+                    online=False,
+                    enable_vector=False,
+                ),
+            )
+            event = {
+                "schema_version": 1,
+                "seq": 1,
+                "run_id": "PAUSE TEST:0",
+                "type": "room_entered",
+                "game_frame": 10,
+                "context": {"stage": 1, "room_index": 1, "room_spawn_seed": 1},
+                "payload": {},
+            }
+            application.pause_listening()
+            with log.open("a", encoding="utf-8") as target:
+                target.write("[ORIENS_EVENT]" + json.dumps(event) + "\n")
+            self.assertEqual(application.poll_events(), ())
+            self.assertIsNone(application.session.state.run_id)
+            application.resume_listening()
+            event["seq"] = 2
+            event["context"]["room_index"] = 2
+            with log.open("a", encoding="utf-8") as target:
+                target.write("[ORIENS_EVENT]" + json.dumps(event) + "\n")
+            received = application.poll_events()
+            self.assertEqual(len(received), 1)
+            self.assertEqual(received[0].seq, 2)
+            self.assertEqual(
+                application.runtime_snapshot().listening, ListeningState.LISTENING
+            )
             application.close()
 
     def test_selected_pack_paths_replace_manual_rag_path_assembly(self) -> None:

@@ -198,6 +198,15 @@ class ConfigService:
             # 不自动删除失败暂存文件；它不影响正式配置，且便于诊断。
             raise
 
+    def update_user_overrides(self, overrides: dict[str, Any]) -> None:
+        """合并设置页管理的字段，同时保留其他已允许的用户设置。"""
+
+        existing: dict[str, Any] = {}
+        if self.user_path.is_file():
+            existing = _read_toml(self.user_path, "用户配置")
+            _validate_user_overrides(existing)
+        self.save_user_overrides(_merge(existing, overrides))
+
 
 def load_config(path: Path | None = None, *, paths: AppPaths | None = None) -> OriensConfig:
     selected_paths = paths or AppPaths.development(repository_root())

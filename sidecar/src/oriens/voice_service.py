@@ -178,7 +178,7 @@ class VoiceService:
         self.cancel()
         self.microphone.close()
         self.player.close()
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        self._executor.shutdown(wait=True, cancel_futures=True)
 
     def _on_audio(self, session: VoiceSession, chunk: AudioChunk) -> None:
         if not self.registry.is_current(session.request_id) or session.asr is None:

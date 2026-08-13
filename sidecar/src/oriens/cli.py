@@ -244,7 +244,7 @@ def run_api_smoke(args: argparse.Namespace) -> int:
     return 0 if not response.simulated else 2
 
 
-def run_ui(args: argparse.Namespace) -> int:
+def run_desktop_command(args: argparse.Namespace) -> int:
     try:
         application = OriensApplication.build(
             AppPaths.development(),
@@ -260,7 +260,7 @@ def run_ui(args: argparse.Namespace) -> int:
         print(f"启动失败：{exc}", file=sys.stderr)
         return 1
     try:
-        from .ui import run_overlay
+        from .desktop import run_desktop
     except ImportError:
         application.close()
         print(
@@ -269,7 +269,7 @@ def run_ui(args: argparse.Namespace) -> int:
         )
         return 1
     try:
-        return run_overlay(application=application)
+        return run_desktop(application=application)
     finally:
         application.close()
 
@@ -790,16 +790,21 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--verbose", action="store_true")
     replay.set_defaults(handler=run_replay)
 
-    ui = subparsers.add_parser("ui", help="启动阶段 3 简体中文语音悬浮窗")
-    ui.add_argument("--log", type=Path, default=default_log_path())
-    ui.add_argument("--config", type=Path)
-    ui.add_argument("--from-start", action="store_true")
-    ui.add_argument(
-        "--online",
-        action="store_true",
-        help="显式启用百炼；未指定或缺少密钥时使用零费用模拟模型",
-    )
-    ui.set_defaults(handler=run_ui)
+    def add_desktop_arguments(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--log", type=Path, default=default_log_path())
+        command.add_argument("--config", type=Path)
+        command.add_argument("--from-start", action="store_true")
+        command.add_argument(
+            "--online",
+            action="store_true",
+            help="显式启用百炼；未指定或缺少密钥时使用零费用模拟模型",
+        )
+        command.set_defaults(handler=run_desktop_command)
+
+    desktop = subparsers.add_parser("desktop", help="启动 Oriens 桌面控制中心与游戏悬浮窗")
+    add_desktop_arguments(desktop)
+    ui = subparsers.add_parser("ui", help="兼容入口：启动 Oriens 桌面产品外壳")
+    add_desktop_arguments(ui)
 
     voice_benchmark = subparsers.add_parser(
         "voice-benchmark", help="运行零费用模拟语音闭环与打断基准"

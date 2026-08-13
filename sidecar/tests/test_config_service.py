@@ -54,6 +54,16 @@ class ConfigServiceTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, "未知字段"):
                 ConfigService(paths).load(explicit)
 
+    def test_settings_update_preserves_other_allowed_user_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = AppPaths.development(self.repository, user_data=Path(directory) / "user")
+            service = ConfigService(paths)
+            service.save_user_overrides({"audio": {"chunk_duration_ms": 80}})
+            service.update_user_overrides({"voice": {"enabled": False}})
+            payload = paths.user_config_file.read_text(encoding="utf-8")
+            self.assertIn("chunk_duration_ms = 80", payload)
+            self.assertIn("enabled = false", payload)
+
 
 if __name__ == "__main__":
     unittest.main()

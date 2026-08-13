@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from enum import Enum
 from pathlib import Path
+from threading import Event, Lock
+import time
 from typing import Callable
 
-from .advice import AdviceEngine
+from .advice import AdviceEngine, AdviceResponse, StateToken
 from .audio import (
     AudioDeviceUnavailable,
     AudioFormat,
@@ -23,12 +27,12 @@ from .knowledge_pack import InstalledKnowledgePack, KnowledgePackError, Knowledg
 from .memory import MemoryStore, NullMemoryStore
 from .modeling import ModelRouter
 from .paths import AppPaths, RuntimeMode
-from .protocol import GameEvent
+from .protocol import EventParseError, GameEvent, parse_event_line
 from .query import QueryEngine
 from .rag import RagError, RagService
 from .rag_pipeline import build_corpus, build_keyword_index
 from .rag_worker import VectorWorkerClient
-from .state import StateStore
+from .state import EventOrderError, StateStore
 from .tailer import LogTailer
 from .voice import CosyVoiceStreamingTTS, QwenRealtimeASR, TerminologyCorrector
 from .voice_service import VoiceCallbacks, VoiceService
@@ -48,6 +52,35 @@ class VoiceAssembly:
     service: VoiceService
     asr_available: bool
     unavailable_reason: str | None = None
+
+
+class ApplicationPhase(str, Enum):
+    STARTING = "应用启动中"
+    READY = "已就绪"
+    EXITING = "正在退出"
+
+
+class ListeningState(str, Enum):
+    LISTENING = "游戏日志监听中"
+    PAUSED = "监听已暂停"
+    STOPPED = "监听已停止"
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeSnapshot:
+    phase: ApplicationPhase
+    listening: ListeningState
+    online: bool
+    online_available: bool
+    config_source: str
+    knowledge_name: str
+    knowledge_version: str
+    knowledge_capability: str
+    log_connection: str
+    rag_status: str
+    voice_status: str
+    run_cost_cny: float
+    run_budget_cny: float
 
 
 class GameSession:
@@ -148,6 +181,13 @@ class OriensApplication:
         self._api_key = api_key
         self._workspace_id = workspace_id
         self._voice_services: list[VoiceService] = []
+        self._voice_status = "尚未初始化；文字功能可用"
+        self._phase = ApplicationPhase.READY
+        self._listening = ListeningState.LISTENING
+        self._last_event_at: float | None = None
+        self._log_error: str | None = None
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="oriens-model")
+        self._close_lock = Lock()
         self._closed = False
 
     @classmethod
@@ -231,7 +271,12 @@ class OriensApplication:
             unavailable = str(exc) + " 文字提问仍可使用。"
         asr = None
         tts = None
-        if self.options.online and self._api_key and self._workspace_id:
+        if (
+            self.config.voice.enabled
+            and self.options.online
+            and self._api_key
+            and self._workspace_id
+        ):
             asr = QwenRealtimeASR(
                 self.config.voice, self.config.audio, self._api_key, self._workspace_id
             )
@@ -251,19 +296,159 @@ class OriensApplication:
             callbacks=callbacks,
         )
         self._voice_services.append(service)
+        if asr is not None:
+            self._voice_status = "语音可用"
+        elif unavailable:
+            self._voice_status = unavailable
+        elif not self.config.voice.enabled:
+            self._voice_status = "语音已在设置中关闭；文字功能可用"
+        elif not self.options.online:
+            self._voice_status = "离线模式下语音不可用；文字功能可用"
+        elif not self._api_key:
+            self._voice_status = "缺少开发凭据，语音不可用；文字功能可用"
+        else:
+            self._voice_status = "语音工作区不可用；文字功能可用"
         return VoiceAssembly(service, asr is not None, unavailable)
 
-    def close(self) -> None:
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
+    def listening(self) -> bool:
+        return self._listening is ListeningState.LISTENING
+
+    def pause_listening(self) -> None:
+        if not self._closed:
+            self._listening = ListeningState.PAUSED
+
+    def resume_listening(self) -> None:
+        if not self._closed:
+            self._listening = ListeningState.LISTENING
+
+    def submit_advice(
+        self, event: GameEvent, cancel: Event
+    ) -> Future[tuple[AdviceResponse, StateToken]]:
         if self._closed:
-            return
-        self._closed = True
-        for service in self._voice_services:
-            service.close()
+            raise RuntimeError("Oriens 正在退出，无法创建新任务。")
+        return self._executor.submit(self.advice_engine.generate, event, cancel)
+
+    def poll_events(self) -> tuple[GameEvent, ...]:
+        """推进日志游标；暂停时丢弃新行，恢复后只处理之后的事件。"""
+
+        if self._closed:
+            return ()
+        try:
+            poll = self.tailer.poll()
+        except OSError:
+            self._log_error = "游戏日志暂时无法读取"
+            return ()
+        self._log_error = None
+        if poll.reopened:
+            self.session.diagnostics.log_reopens += 1
+        if self._listening is ListeningState.PAUSED:
+            return ()
+        events: list[GameEvent] = []
+        for line in poll.lines:
+            event = self.process_log_line(line)
+            if event is not None:
+                events.append(event)
+        return tuple(events)
+
+    def process_log_line(self, line: str) -> GameEvent | None:
+        if self._closed or self._listening is not ListeningState.LISTENING:
+            return None
+        try:
+            event = parse_event_line(line)
+        except EventParseError:
+            self.session.mark_invalid()
+            return None
+        if event is None:
+            self.session.mark_ignored()
+            return None
+        previous_room = (
+            self.session.state.context.get("room_index"),
+            self.session.state.context.get("room_spawn_seed"),
+        )
+        try:
+            self.session.apply(event)
+        except EventOrderError:
+            return None
+        self._last_event_at = time.monotonic()
+        self.budget.set_run(self.session.state.run_id)
+        current_room = (
+            self.session.state.context.get("room_index"),
+            self.session.state.context.get("room_spawn_seed"),
+        )
+        if current_room != previous_room and event.type != "collectible_spawned":
+            for service in tuple(self._voice_services):
+                service.room_changed()
+        return event
+
+    def runtime_snapshot(self) -> RuntimeSnapshot:
+        pack = self.knowledge_pack
+        if pack is not None:
+            knowledge_name = pack.manifest.display_name
+            capability = "完整能力" if "vector" in pack.capabilities else "轻量能力"
+        else:
+            knowledge_name = "开发配置知识包"
+            capability = "完整能力" if self.config.rag.vector_enabled else "轻量能力"
+        if self._log_error:
+            log_connection = self._log_error
+        elif self._last_event_at is None:
+            log_connection = "等待游戏事件"
+        elif time.monotonic() - self._last_event_at > 3:
+            log_connection = "日志已连接，等待新事件"
+        else:
+            log_connection = "游戏已连接"
+        vector = getattr(self.rag, "_vector", None)
+        if vector is None:
+            rag_status = "关键词检索可用"
+        elif getattr(vector, "available", False):
+            rag_status = "本地混合检索可用"
+        else:
+            rag_status = "向量能力不可用，已使用关键词检索"
+        source = "开发显式配置" if self.options.config_path is not None else "用户设置或默认配置"
+        return RuntimeSnapshot(
+            self._phase,
+            self._listening,
+            self.options.online and self.api_key_available,
+            self.api_key_available,
+            source,
+            knowledge_name,
+            self.config.rag.content_version,
+            capability,
+            log_connection,
+            rag_status,
+            self._voice_status,
+            self.budget.run_total_cny,
+            self.budget.run_limit_cny,
+        )
+
+    def close(self) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._phase = ApplicationPhase.EXITING
+            self._listening = ListeningState.STOPPED
+        closers = [service.close for service in tuple(self._voice_services)]
         self._voice_services.clear()
-        self.tailer.close()
-        self.session.close()
-        self.rag.close()
-        self.memory.close()
+        closers.extend(
+            (
+                lambda: self._executor.shutdown(wait=True, cancel_futures=True),
+                self.tailer.close,
+                self.session.close,
+                self.rag.close,
+                self.memory.close,
+            )
+        )
+        for close in closers:
+            try:
+                close()
+            except Exception:
+                # 完全退出必须继续释放其余资源；普通用户界面不显示底层异常细节。
+                continue
 
 
 def default_log_path() -> Path:
