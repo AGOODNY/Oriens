@@ -10,8 +10,8 @@ from threading import Event
 import time
 from typing import Any
 
-from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QKeyEvent, QMouseEvent
+from PySide6.QtCore import QObject, QPoint, QRectF, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QColor, QCloseEvent, QKeyEvent, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -97,6 +97,39 @@ class _VoiceSignals(QObject):
     answer = Signal(str, object, object)
     failed = Signal(str, str)
     metrics = Signal(str, object)
+
+
+class _ThinkingSpinner(QWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._angle = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(70)
+        self._timer.timeout.connect(self._advance)
+        self.setFixedSize(24, 24)
+
+    def start(self) -> None:
+        self._timer.start()
+        self.update()
+
+    def stop(self) -> None:
+        self._timer.stop()
+
+    def is_running(self) -> bool:
+        return self._timer.isActive()
+
+    @Slot()
+    def _advance(self) -> None:
+        self._angle = (self._angle + 30) % 360
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor("#9fd7ff"), 3)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawArc(QRectF(4, 4, 16, 16), self._angle * 16, 255 * 16)
 
 
 class OverlayWindow(QMainWindow):
@@ -364,6 +397,19 @@ class OverlayWindow(QMainWindow):
         self.advice_label = QLabel("进入已覆盖的道具房后，这里会显示建议。")
         self.advice_label.setObjectName("advice")
         self.advice_label.setWordWrap(True)
+        self.thinking_widget = QWidget()
+        self.thinking_widget.setObjectName("thinkingWidget")
+        thinking_layout = QHBoxLayout(self.thinking_widget)
+        thinking_layout.setContentsMargins(2, 8, 2, 8)
+        thinking_layout.setSpacing(10)
+        self.thinking_spinner = _ThinkingSpinner(self.thinking_widget)
+        self.thinking_label = QLabel("正在思考中")
+        self.thinking_label.setObjectName("thinking")
+        thinking_layout.addStretch(1)
+        thinking_layout.addWidget(self.thinking_spinner)
+        thinking_layout.addWidget(self.thinking_label)
+        thinking_layout.addStretch(1)
+        self.thinking_widget.hide()
         self.reason_label = QLabel("")
         self.reason_label.setObjectName("reason")
         self.reason_label.setWordWrap(True)
@@ -375,6 +421,7 @@ class OverlayWindow(QMainWindow):
         self.metrics_label = QLabel("置信度 — · 状态序号 —")
         self.metrics_label.setObjectName("metrics")
         advice_layout.addWidget(self.advice_caption)
+        advice_layout.addWidget(self.thinking_widget)
         advice_layout.addWidget(self.advice_label)
         advice_layout.addWidget(self.reason_label)
         advice_layout.addWidget(self.source_label)
@@ -460,6 +507,8 @@ class OverlayWindow(QMainWindow):
             self._normal_size = self.size()
         for widget in self._compact_hidden_widgets:
             widget.setVisible(not self._compact_mode)
+        if self.thinking_spinner.is_running():
+            self._start_thinking()
         self.compact_button.setText("□" if self._compact_mode else "—")
         self.compact_button.setToolTip(
             "恢复完整界面" if self._compact_mode else "精简模式：只显示输入框和回答框"
@@ -571,6 +620,7 @@ class OverlayWindow(QMainWindow):
             self.voice_service.cancel()
         self._cancel = Event()
         self.connection_label.setText("正在生成建议")
+        self._start_thinking()
         self._future = self._executor.submit(self.advice_engine.generate, event, self._cancel)
         self._future.add_done_callback(self._on_advice_done)
 
@@ -587,8 +637,10 @@ class OverlayWindow(QMainWindow):
     @Slot(object, object)
     def _show_advice(self, response: AdviceResponse, token: StateToken) -> None:
         if not token.is_current(self.store.state):
+            self._stop_thinking()
             self.connection_label.setText("过期建议已丢弃")
             return
+        self._stop_thinking()
         self.connection_label.setText("建议已就绪")
         self.advice_label.setText(response.advice)
         reason = "理由：" + response.reason
@@ -687,13 +739,19 @@ class OverlayWindow(QMainWindow):
             return
         self._cancel_pending()
         self.question_input.clear()
-        self.voice_service.ask_text(text, speak=self.voice_enabled.isChecked())
+        request_id = self.voice_service.ask_text(text, speak=self.voice_enabled.isChecked())
+        if request_id is not None:
+            self._start_thinking()
 
     @Slot(str, object)
     def _show_voice_state(self, request_id: str, state: VoiceState) -> None:
         if request_id and self.voice_service is not None and not self.voice_service.is_current(request_id) and state != VoiceState.CANCELLED:
             return
         self.voice_status_label.setText(state.value)
+        if state == VoiceState.THINKING:
+            self._start_thinking()
+        elif state in {VoiceState.IDLE, VoiceState.CANCELLED, VoiceState.OFFLINE}:
+            self._stop_thinking()
 
     @Slot(str, object)
     def _show_transcript(self, request_id: str, transcript: Transcript) -> None:
@@ -713,8 +771,10 @@ class OverlayWindow(QMainWindow):
         if self.voice_service is None or not self.voice_service.is_current(request_id):
             return
         if not token.is_current(self.store.state, request_id):
+            self._stop_thinking()
             self.voice_service.cancel()
             return
+        self._stop_thinking()
         self.advice_label.setText(response.answer)
         note = response.delivery_note or "回答通过本地证据和结构校验。"
         self.reason_label.setText(note)
@@ -738,6 +798,10 @@ class OverlayWindow(QMainWindow):
         if request_id and self.voice_service is not None and self.voice_service.is_current(request_id):
             pass
         self.voice_hint_label.setText(message)
+        was_thinking = self.thinking_spinner.is_running()
+        self._stop_thinking()
+        if was_thinking:
+            self.advice_label.setText(message)
         if "仍可" not in message:
             self.voice_status_label.setText("已取消")
 
@@ -766,16 +830,35 @@ class OverlayWindow(QMainWindow):
 
     @Slot(str)
     def _show_model_error(self, message: str) -> None:
+        self._stop_thinking()
         self.connection_label.setText("建议不可用")
         self.advice_label.setText(message)
 
     def _cancel_pending(self) -> None:
+        self._stop_thinking()
         if self._cancel is not None:
             self._cancel.set()
         if self._future is not None:
             self._future.cancel()
         self._cancel = None
         self._future = None
+
+    def _start_thinking(self) -> None:
+        self.advice_label.hide()
+        self.reason_label.hide()
+        self.source_label.hide()
+        self.metrics_label.hide()
+        self.thinking_widget.show()
+        self.thinking_spinner.start()
+
+    def _stop_thinking(self) -> None:
+        self.thinking_spinner.stop()
+        self.thinking_widget.hide()
+        self.advice_label.show()
+        if not self._compact_mode:
+            self.reason_label.show()
+            self.source_label.show()
+            self.metrics_label.show()
 
     def _update_connection(self) -> None:
         if self._last_event_at is None:
@@ -903,6 +986,7 @@ QFrame#adviceCard { background: rgba(26, 53, 70, 230); border: 1px solid #356d8f
 QLabel#caption { color: #8fa7c1; font-size: 11px; font-weight: 700; }
 QLabel#value { color: #f1f5fb; font-size: 13px; }
 QLabel#advice { color: #ffffff; font-size: 17px; font-weight: 750; }
+QLabel#thinking { color: #d7edff; font-size: 15px; font-weight: 700; }
 QLabel#reason { color: #c4d7e7; font-size: 12px; }
 QLabel#source { color: #8fc8ff; font-size: 11px; }
 QScrollArea#mainScroll { background: transparent; border: 0; }
