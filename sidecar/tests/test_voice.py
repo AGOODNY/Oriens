@@ -76,7 +76,7 @@ class VoiceAdapterTests(unittest.TestCase):
     def test_qwen_protocol_emits_partial_final_and_never_puts_secret_in_url(self) -> None:
         ScriptedTransport.scripts.append([
             json.dumps({"type": "session.updated"}),
-            json.dumps({"type": "conversation.item.input_audio_transcription.delta", "text": "硫", "stash": "磺火"}),
+            json.dumps({"type": "conversation.item.input_audio_transcription.text", "text": "硫", "stash": "磺火"}),
             json.dumps({"type": "conversation.item.input_audio_transcription.completed", "transcript": "硫磺火"}),
             json.dumps({"type": "session.finished"}),
         ])
@@ -95,6 +95,7 @@ class VoiceAdapterTests(unittest.TestCase):
         transport = ScriptedTransport.instances[0]
         self.assertNotIn("test-secret", transport.url)
         self.assertEqual(transport.headers["Authorization"], "Bearer test-secret")
+        self.assertEqual(transport.headers["OpenAI-Beta"], "realtime=v1")
         sent_types = [item.get("type") for item in transport.sent]
         self.assertIn("input_audio_buffer.append", sent_types)
         self.assertIn("input_audio_buffer.commit", sent_types)
@@ -141,7 +142,7 @@ class VoiceAdapterTests(unittest.TestCase):
         session.commit()
         session._thread.join(timeout=1)
         self.assertFalse(session._thread.is_alive())
-        self.assertEqual(str(errors[0]), "实时语音识别连接失败，文本功能仍可使用。")
+        self.assertIn("实时语音识别超时", str(errors[0]))
 
     def test_cosyvoice_streams_binary_audio_and_uses_one_task_id(self) -> None:
         ScriptedTransport.scripts.append([

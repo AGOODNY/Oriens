@@ -9,6 +9,7 @@ import math
 from pathlib import Path
 import platform
 import sys
+from threading import Event
 import time
 from typing import TextIO
 
@@ -33,7 +34,7 @@ from .rag_v2_pipeline import RagV2Paths, build_full_corpus
 from .rag_worker import VectorWorkerClient, convert_sqlite_vectors_to_faiss
 from .state import EventOrderError, StateStore
 from .tailer import LogTailer
-from .voice import CosyVoiceStreamingTTS, QwenRealtimeASR
+from .voice import CosyVoiceStreamingTTS, QwenRealtimeASR, VoiceError
 from .voice import MockRealtimeASR, MockStreamingTTS, TerminologyCorrector
 from .voice_service import VoiceCallbacks, VoiceService
 
@@ -432,6 +433,99 @@ def run_voice_benchmark(args: argparse.Namespace) -> int:
         engine.rag.close()
 
 
+def run_voice_api_smoke(args: argparse.Namespace) -> int:
+    """显式授权后执行最小真实 ASR/TTS 权限与协议烟雾测试。"""
+
+    if not args.confirm_charge:
+        print("未执行：真实语音测试可能产生费用，请添加 --confirm-charge。", file=sys.stderr)
+        return 1
+    try:
+        config = load_config(args.config)
+        provider, _model = config.provider_for("advice")
+        api_key = load_api_key(provider.api_key_env)
+        workspace_id = load_api_key(config.voice.workspace_id_env)
+    except ConfigError as exc:
+        print(f"启动失败：{exc}", file=sys.stderr)
+        return 1
+    if not api_key or not workspace_id:
+        print("启动失败：缺少百炼 API Key 或业务空间 ID。", file=sys.stderr)
+        return 1
+
+    started = time.perf_counter()
+    asr_errors: list[str] = []
+    transcripts = []
+    asr_started = time.perf_counter()
+    if not args.tts_only:
+        cancel = Event()
+        asr = QwenRealtimeASR(config.voice, config.audio, api_key, workspace_id)
+        session = asr.start(
+            "voice-api-smoke-asr", cancel, transcripts.append,
+            lambda error: asr_errors.append(str(error)),
+        )
+        # 一秒程序生成的 440 Hz PCM，只验证权限/协议，不录制或上传用户麦克风。
+        import math as _math
+        samples = bytearray()
+        for index in range(config.audio.input_sample_rate):
+            value = int(1200 * _math.sin(2 * _math.pi * 440 * index / config.audio.input_sample_rate))
+            samples.extend(value.to_bytes(2, "little", signed=True))
+        session.send_audio(AudioChunk(bytes(samples), AudioFormat(config.audio.input_sample_rate), 0))
+        session.commit()
+        if not session.wait(config.voice.asr_timeout_seconds + 3):
+            session.close()
+            asr_errors.append("ASR 烟雾测试等待超时")
+    asr_elapsed_ms = (time.perf_counter() - asr_started) * 1000
+
+    tts_text = "ORIENS语音测试。"
+    tts_chunks: list[AudioChunk] = []
+    tts_error: str | None = None
+    tts_started = time.perf_counter()
+    tts_first_audio_ms: float | None = None
+
+    def on_tts_audio(chunk: AudioChunk) -> None:
+        nonlocal tts_first_audio_ms
+        if tts_first_audio_ms is None:
+            tts_first_audio_ms = (time.perf_counter() - tts_started) * 1000
+        tts_chunks.append(chunk)
+
+    if not args.asr_only:
+        try:
+            CosyVoiceStreamingTTS(config.voice, api_key, workspace_id).synthesize(
+                "voice-api-smoke-tts", (tts_text,), Event(), on_tts_audio
+            )
+        except VoiceError as exc:
+            tts_error = str(exc)
+    tts_elapsed_ms = (time.perf_counter() - tts_started) * 1000
+
+    result = {
+        "region": "cn-beijing",
+        "asr": {
+            "model": config.voice.asr_model_id,
+            "ok": args.tts_only or not asr_errors,
+            "skipped": args.tts_only,
+            "audio_seconds": 1.0,
+            "final_transcript_received": any(item.final for item in transcripts),
+            "elapsed_ms": round(asr_elapsed_ms, 3),
+            "errors": asr_errors,
+        },
+        "tts": {
+            "model": config.voice.tts_model_id,
+            "voice": config.voice.tts_voice,
+            "ok": args.asr_only or (tts_error is None and bool(tts_chunks)),
+            "skipped": args.asr_only,
+            "text_chars": len(tts_text),
+            "audio_chunks": len(tts_chunks),
+            "audio_bytes": sum(len(item.data) for item in tts_chunks),
+            "first_audio_ms": round(tts_first_audio_ms, 3) if tts_first_audio_ms is not None else None,
+            "elapsed_ms": round(tts_elapsed_ms, 3),
+            "error": tts_error,
+        },
+        "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+        "audio_saved": False,
+    }
+    _json_output(result)
+    return 0 if result["asr"]["ok"] and result["tts"]["ok"] else 2
+
+
 def _percentile(values: list[float], quantile: float) -> float:
     if not values:
         return 0.0
@@ -750,6 +844,16 @@ def build_parser() -> argparse.ArgumentParser:
     voice_benchmark.add_argument("--stress-cycles", type=int, default=100)
     voice_benchmark.add_argument("--timeout", type=float, default=10.0)
     voice_benchmark.set_defaults(handler=run_voice_benchmark)
+
+    voice_smoke = subparsers.add_parser(
+        "voice-api-smoke", help="执行一次最小真实百炼 ASR/TTS 烟雾测试"
+    )
+    voice_smoke.add_argument("--config", type=Path)
+    voice_smoke.add_argument("--confirm-charge", action="store_true")
+    voice_modes = voice_smoke.add_mutually_exclusive_group()
+    voice_modes.add_argument("--asr-only", action="store_true")
+    voice_modes.add_argument("--tts-only", action="store_true")
+    voice_smoke.set_defaults(handler=run_voice_api_smoke)
 
     demo = subparsers.add_parser("advice-demo", help="使用模拟模型生成固定道具建议")
     demo.add_argument("collectible_id", type=int, nargs="?", default=350)

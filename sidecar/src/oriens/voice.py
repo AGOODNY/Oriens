@@ -71,6 +71,7 @@ class RealtimeASRSession(Protocol):
     def commit(self) -> None: ...
     def cancel(self) -> None: ...
     def close(self) -> None: ...
+    def wait(self, timeout: float) -> bool: ...
 
 
 class RealtimeASR(Protocol):
@@ -223,6 +224,9 @@ class MockASRSession:
     def close(self) -> None:
         self.closed = True
 
+    def wait(self, timeout: float) -> bool:
+        return True
+
 
 class MockRealtimeASR:
     def __init__(self, final: str, partials: tuple[str, ...] = ()) -> None:
@@ -337,6 +341,10 @@ class _QwenASRSession:
         self.cancel()
         self._thread.join(timeout=2.0)
 
+    def wait(self, timeout: float) -> bool:
+        self._thread.join(timeout=max(0.0, timeout))
+        return not self._thread.is_alive()
+
     def _run(self) -> None:
         retries = self._settings.asr_max_retries
         for attempt in range(retries + 1):
@@ -347,9 +355,9 @@ class _QwenASRSession:
                 return
             except VoiceCancelled:
                 return
-            except (WebSocketError, VoiceError):
+            except (WebSocketError, VoiceError) as exc:
                 if attempt >= retries:
-                    self._on_error(VoiceError("实时语音识别连接失败，文本功能仍可使用。"))
+                    self._on_error(VoiceError(f"实时语音识别失败：{exc}；文本功能仍可使用。"))
                     return
                 if self._cancel.wait(min(0.15 * (attempt + 1), 0.5)):
                     return
@@ -362,7 +370,11 @@ class _QwenASRSession:
         endpoint += separator + "model=" + quote(self._settings.asr_model_id, safe="")
         transport = self._factory(
             endpoint,
-            {"Authorization": "Bearer " + self._api_key, "User-Agent": "Oriens/0.2"},
+            {
+                "Authorization": "Bearer " + self._api_key,
+                "OpenAI-Beta": "realtime=v1",
+                "User-Agent": "Oriens/0.2",
+            },
             self._settings.asr_timeout_seconds,
         )
         with self._transport_lock:
@@ -413,7 +425,10 @@ class _QwenASRSession:
                 except json.JSONDecodeError:
                     raise VoiceError("语音识别返回格式无效") from None
                 kind = event.get("type")
-                if kind == "conversation.item.input_audio_transcription.delta":
+                if kind in {
+                    "conversation.item.input_audio_transcription.text",
+                    "conversation.item.input_audio_transcription.delta",
+                }:
                     text = str(event.get("text", "")) + str(event.get("stash", ""))
                     if text:
                         self._on_transcript(Transcript(text, False, str(event.get("language", "zh"))))
@@ -422,7 +437,7 @@ class _QwenASRSession:
                     if isinstance(transcript, str) and transcript.strip():
                         self._on_transcript(Transcript(transcript.strip(), True, str(event.get("language", "zh"))))
                 elif kind == "conversation.item.input_audio_transcription.failed" or kind == "error":
-                    raise VoiceError("实时语音识别失败")
+                    raise VoiceError("实时语音识别失败" + _safe_remote_code(event))
                 elif kind == "session.finished":
                     finished = True
         except WebSocketClosed:
@@ -476,7 +491,8 @@ class CosyVoiceStreamingTTS:
                 if attempt < self._settings.tts_max_retries:
                     if cancel.wait(min(0.15 * (attempt + 1), 0.5)):
                         raise VoiceCancelled("语音合成已取消") from None
-        raise VoiceError("语音合成连接失败，文字回答仍可查看。") from last_error
+        detail = f"：{last_error}" if last_error is not None else ""
+        raise VoiceError(f"语音合成连接失败{detail}；文字回答仍可查看。") from last_error
 
     def _synthesize_once(self, segments, cancel, on_audio) -> None:
         endpoint = self._settings.tts_endpoint.format(workspace_id=quote(self._workspace_id, safe=""))
@@ -526,7 +542,7 @@ class CosyVoiceStreamingTTS:
                 if kind == "task-started":
                     started = True
                 elif kind == "task-failed":
-                    raise VoiceError("语音合成任务启动失败")
+                    raise VoiceError("语音合成任务启动失败" + _safe_remote_code(event))
             for segment in segments:
                 if cancel.is_set():
                     raise VoiceCancelled("语音合成已取消")
@@ -558,7 +574,7 @@ class CosyVoiceStreamingTTS:
                 if kind == "task-finished":
                     finished = True
                 elif kind == "task-failed":
-                    raise VoiceError("语音合成任务失败")
+                    raise VoiceError("语音合成任务失败" + _safe_remote_code(event))
             if cancel.is_set():
                 raise VoiceCancelled("语音合成已取消")
         finally:
@@ -580,6 +596,20 @@ class CosyVoiceStreamingTTS:
         if not isinstance(value, dict):
             raise VoiceError("语音合成返回格式无效")
         return value
+
+
+def _safe_remote_code(event: dict) -> str:
+    header = event.get("header")
+    error = event.get("error")
+    candidates = []
+    if isinstance(header, dict):
+        candidates.extend((header.get("error_code"), header.get("code")))
+    if isinstance(error, dict):
+        candidates.extend((error.get("code"), error.get("type")))
+    for value in candidates:
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", value):
+            return f"（错误码 {value}）"
+    return ""
 
 
 @dataclass(slots=True)

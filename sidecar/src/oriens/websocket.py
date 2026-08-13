@@ -49,7 +49,7 @@ class StandardWebSocket:
             )
             # 握手期间也暴露给 close()，使程序退出/取消能中断正在建立的连接。
             self._socket = wrapped
-            wrapped.settimeout(min(self._timeout, 0.25))
+            wrapped.settimeout(self._timeout)
             key = base64.b64encode(os.urandom(16)).decode("ascii")
             lines = [
                 f"GET {path} HTTP/1.1",
@@ -64,8 +64,9 @@ class StandardWebSocket:
             response, remainder = self._read_http_headers(wrapped)
             status = response[0].split(" ", 2)
             if len(status) < 2 or status[1] != "101":
+                code = status[1] if len(status) >= 2 and status[1].isdigit() else "未知"
                 self.close()
-                raise WebSocketError("语音服务拒绝建立连接")
+                raise WebSocketError(f"语音服务拒绝建立连接（HTTP {code}）")
             headers = {}
             for line in response[1:]:
                 if ":" in line:
@@ -79,6 +80,7 @@ class StandardWebSocket:
                 raise WebSocketError("语音服务握手校验失败")
             self._socket = wrapped
             self._receive_buffer.extend(remainder)
+            wrapped.settimeout(min(self._timeout, 0.25))
         except WebSocketError:
             self.close()
             raise
