@@ -301,6 +301,12 @@ class VoiceService:
                     self.callbacks.on_error(
                         session.request_id, "语音播报失败，文字回答仍可查看。"
                     )
+            except Exception:
+                # Worker 边界必须收口意外的网络/音频异常，避免 Future 回调打印堆栈。
+                if self.registry.is_current(session.request_id):
+                    self.callbacks.on_error(
+                        session.request_id, "语音播报失败，文字回答仍可查看。"
+                    )
             if self.registry.is_current(session.request_id):
                 self._set_state(session, VoiceState.IDLE)
                 self.callbacks.on_metrics(session.request_id, session.metrics)

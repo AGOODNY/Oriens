@@ -130,6 +130,20 @@ class VoiceServiceTests(unittest.TestCase):
         self.assertIn("语音播报失败，文字回答仍可查看。", events["errors"])
         service.close()
 
+    def test_unexpected_tts_worker_error_is_safely_reported(self) -> None:
+        class FailingTTS:
+            def synthesize(self, request_id, text_segments, cancel, on_audio):
+                raise RuntimeError("模拟底层 TLS 异常")
+
+        service, microphone, state, events, played = self._service()
+        service.tts = FailingTTS()
+        service.ask_text("硫磺火有什么效果", speak=True)
+        deadline = time.monotonic() + 2
+        while not events["errors"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIn("语音播报失败，文字回答仍可查看。", events["errors"])
+        service.close()
+
 
 if __name__ == "__main__":
     unittest.main()

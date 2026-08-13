@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
+from html import escape
 from pathlib import Path
 from threading import Event
 import time
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QLayout,
     QMainWindow,
     QPushButton,
     QProgressBar,
@@ -228,9 +230,22 @@ class OverlayWindow(QMainWindow):
         shell = QFrame()
         shell.setObjectName("shell")
         self.setCentralWidget(shell)
-        layout = QVBoxLayout(shell)
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(1, 1, 1, 1)
+
+        self.main_scroll = QScrollArea()
+        self.main_scroll.setObjectName("mainScroll")
+        self.main_scroll.setWidgetResizable(True)
+        self.main_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.main_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        content.setObjectName("overlayContent")
+        layout = QVBoxLayout(content)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         layout.setContentsMargins(18, 14, 18, 16)
         layout.setSpacing(10)
+        self.main_scroll.setWidget(content)
+        shell_layout.addWidget(self.main_scroll)
 
         header = QHBoxLayout()
         title = QLabel("ORIENS")
@@ -278,14 +293,17 @@ class OverlayWindow(QMainWindow):
         device_row.addWidget(QLabel("输入设备"))
         self.input_device_combo = QComboBox()
         self.input_device_combo.setMinimumWidth(230)
+        self.input_device_combo.setMinimumHeight(38)
         device_row.addWidget(self.input_device_combo, 1)
         voice_layout.addLayout(device_row)
         ptt_row = QHBoxLayout()
         self.ptt_button = QPushButton(f"按住说话（{self.config.voice.push_to_talk_key}）")
         self.ptt_button.setObjectName("primary")
+        self.ptt_button.setMinimumHeight(40)
         self.ptt_button.pressed.connect(self._voice_press)
         self.ptt_button.released.connect(self._voice_release)
         self.cancel_voice_button = QPushButton("取消")
+        self.cancel_voice_button.setMinimumHeight(40)
         self.cancel_voice_button.clicked.connect(self._voice_cancel)
         ptt_row.addWidget(self.ptt_button, 1)
         ptt_row.addWidget(self.cancel_voice_button)
@@ -302,9 +320,11 @@ class OverlayWindow(QMainWindow):
         voice_layout.addWidget(self.question_label)
         text_row = QHBoxLayout()
         self.question_input = QLineEdit()
+        self.question_input.setMinimumHeight(38)
         self.question_input.setPlaceholderText("也可以键入普通游戏问题")
         self.question_input.returnPressed.connect(self._submit_text_question)
         self.ask_button = QPushButton("提问")
+        self.ask_button.setMinimumHeight(38)
         self.ask_button.clicked.connect(self._submit_text_question)
         text_row.addWidget(self.question_input, 1)
         text_row.addWidget(self.ask_button)
@@ -340,6 +360,7 @@ class OverlayWindow(QMainWindow):
         self.reason_label.setWordWrap(True)
         self.source_label = QLabel("")
         self.source_label.setObjectName("source")
+        self.source_label.setTextFormat(Qt.TextFormat.RichText)
         self.source_label.setWordWrap(True)
         self.source_label.setOpenExternalLinks(True)
         self.metrics_label = QLabel("置信度 — · 状态序号 —")
@@ -521,10 +542,7 @@ class OverlayWindow(QMainWindow):
         if response.delivery_note:
             reason += "\n" + response.delivery_note
         self.reason_label.setText(reason)
-        links = [
-            f'<a href="{source.url}">{source.title}</a>' for source in response.sources
-        ]
-        self.source_label.setText("来源：" + " · ".join(links))
+        self.source_label.setText(_format_source_links(response.sources))
         if response.rag_hits:
             debug_lines = []
             for hit in response.rag_hits:
@@ -647,9 +665,7 @@ class OverlayWindow(QMainWindow):
         self.advice_label.setText(response.answer)
         note = response.delivery_note or "回答通过本地证据和结构校验。"
         self.reason_label.setText(note)
-        self.source_label.setText(
-            "来源：" + " · ".join(f'<a href="{item.url}">{item.title}</a>' for item in response.sources)
-        )
+        self.source_label.setText(_format_source_links(response.sources))
         self.metrics_label.setText(
             f"置信度 {response.confidence:.0%} · 状态序号 {response.state_seq} · "
             f"{'离线摘要' if response.simulated else '在线模型'}"
@@ -809,6 +825,15 @@ def _half_hearts(value: Any) -> str:
     return f"{value / 2:g}"
 
 
+def _format_source_links(sources: Any) -> str:
+    links = " · ".join(
+        '<a style="color:#b9e5ff;text-decoration:underline;" '
+        f'href="{escape(source.url, quote=True)}">{escape(source.title)}</a>'
+        for source in sources
+    )
+    return '<span style="color:#c9eaff;">来源：' + links + "</span>"
+
+
 _STYLE = """
 QFrame#shell {
     background: rgba(18, 21, 28, 242);
@@ -827,7 +852,8 @@ QLabel#value { color: #f1f5fb; font-size: 13px; }
 QLabel#advice { color: #ffffff; font-size: 17px; font-weight: 750; }
 QLabel#reason { color: #c4d7e7; font-size: 12px; }
 QLabel#source { color: #8fc8ff; font-size: 11px; }
-QLabel#source a { color: #8fc8ff; }
+QScrollArea#mainScroll { background: transparent; border: 0; }
+QScrollArea#mainScroll > QWidget > QWidget { background: transparent; }
 QLabel#metrics { color: #83b6a4; font-size: 11px; }
 QLabel#events { color: #aebccc; font-family: Consolas, "Microsoft YaHei UI"; font-size: 11px; padding: 7px; }
 QPushButton#close { background: transparent; color: #aebccc; border: 0; font-size: 20px; width: 26px; }

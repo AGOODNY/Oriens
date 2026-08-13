@@ -31,6 +31,8 @@ class StandardWebSocket:
         self._timeout = timeout
         self._socket: socket.socket | ssl.SSLSocket | None = None
         self._receive_buffer = bytearray()
+        self._fragment_buffer = bytearray()
+        self._fragment_opcode: int | None = None
         self._send_lock = Lock()
 
     def connect(self) -> None:
@@ -95,13 +97,13 @@ class StandardWebSocket:
         self._send_frame(0x1, value.encode("utf-8"))
 
     def receive(self, cancel: Event) -> str | bytes | None:
-        fragments = bytearray()
-        fragment_opcode: int | None = None
         while not cancel.is_set():
             try:
                 opcode, final, payload = self._receive_frame()
-            except socket.timeout:
+            except (socket.timeout, ssl.SSLWantReadError):
                 return None
+            except (OSError, ssl.SSLError):
+                raise WebSocketClosed("语音服务连接已中断") from None
             if opcode == 0x8:
                 raise WebSocketClosed("语音服务连接已关闭")
             if opcode == 0x9:
@@ -110,16 +112,19 @@ class StandardWebSocket:
             if opcode == 0xA:
                 continue
             if opcode in {0x1, 0x2}:
-                fragment_opcode = opcode
-                fragments.extend(payload)
-            elif opcode == 0x0 and fragment_opcode is not None:
-                fragments.extend(payload)
+                self._fragment_opcode = opcode
+                self._fragment_buffer.clear()
+                self._fragment_buffer.extend(payload)
+            elif opcode == 0x0 and self._fragment_opcode is not None:
+                self._fragment_buffer.extend(payload)
             else:
                 continue
             if not final:
                 continue
-            data = bytes(fragments)
-            opcode = fragment_opcode or opcode
+            data = bytes(self._fragment_buffer)
+            opcode = self._fragment_opcode or opcode
+            self._fragment_buffer.clear()
+            self._fragment_opcode = None
             if opcode == 0x1:
                 try:
                     return data.decode("utf-8")
@@ -164,38 +169,50 @@ class StandardWebSocket:
                 raise WebSocketClosed("语音服务连接已中断") from None
 
     def _receive_frame(self) -> tuple[int, bool, bytes]:
-        first, second = self._recv_exact(2)
+        self._fill_receive_buffer(2)
+        first, second = self._receive_buffer[0], self._receive_buffer[1]
         final = bool(first & 0x80)
         opcode = first & 0x0F
         length = second & 0x7F
         masked = bool(second & 0x80)
+        header_length = 2
         if length == 126:
-            length = struct.unpack("!H", self._recv_exact(2))[0]
+            self._fill_receive_buffer(4)
+            length = struct.unpack("!H", self._receive_buffer[2:4])[0]
+            header_length = 4
         elif length == 127:
-            length = struct.unpack("!Q", self._recv_exact(8))[0]
+            self._fill_receive_buffer(10)
+            length = struct.unpack("!Q", self._receive_buffer[2:10])[0]
+            header_length = 10
         if length > 32 * 1024 * 1024:
             raise WebSocketError("语音服务返回数据过大")
-        mask = self._recv_exact(4) if masked else b""
-        payload = self._recv_exact(length)
+        mask_length = 4 if masked else 0
+        frame_length = header_length + mask_length + length
+        self._fill_receive_buffer(frame_length)
+        mask_start = header_length
+        payload_start = mask_start + mask_length
+        mask = bytes(self._receive_buffer[mask_start:payload_start])
+        payload = bytes(self._receive_buffer[payload_start:frame_length])
+        del self._receive_buffer[:frame_length]
         if masked:
             payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
         return opcode, final, payload
 
     def _recv_exact(self, length: int) -> bytes:
+        self._fill_receive_buffer(length)
+        data = bytes(self._receive_buffer[:length])
+        del self._receive_buffer[:length]
+        return data
+
+    def _fill_receive_buffer(self, length: int) -> None:
         sock = self._socket
         if sock is None:
             raise WebSocketClosed("语音服务连接已关闭")
-        data = bytearray()
-        if self._receive_buffer:
-            take = min(length, len(self._receive_buffer))
-            data.extend(self._receive_buffer[:take])
-            del self._receive_buffer[:take]
-        while len(data) < length:
-            chunk = sock.recv(length - len(data))
+        while len(self._receive_buffer) < length:
+            chunk = sock.recv(length - len(self._receive_buffer))
             if not chunk:
                 raise WebSocketClosed("语音服务连接已关闭")
-            data.extend(chunk)
-        return bytes(data)
+            self._receive_buffer.extend(chunk)
 
     @staticmethod
     def _read_http_headers(sock: ssl.SSLSocket) -> tuple[list[str], bytes]:
