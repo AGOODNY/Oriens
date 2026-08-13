@@ -139,6 +139,9 @@ class OverlayWindow(QMainWindow):
         self._voice_signals.failed.connect(self._show_voice_error)
         self._voice_signals.metrics.connect(self._show_voice_metrics)
         self._drag_origin: QPoint | None = None
+        self._compact_mode = False
+        self._normal_size = None
+        self._compact_hidden_widgets: list[QWidget] = []
         self.voice_service = voice_service
 
         self.setWindowTitle("Oriens：你的游戏向导")
@@ -255,6 +258,11 @@ class OverlayWindow(QMainWindow):
         self.connection_label = QLabel("等待日志")
         self.connection_label.setObjectName("status")
         header.addWidget(self.connection_label)
+        self.compact_button = QPushButton("—")
+        self.compact_button.setObjectName("windowControl")
+        self.compact_button.setToolTip("精简模式：只显示输入框和回答框")
+        self.compact_button.clicked.connect(self._toggle_compact_mode)
+        header.addWidget(self.compact_button)
         close_button = QPushButton("×")
         close_button.setObjectName("close")
         close_button.setToolTip("关闭")
@@ -268,17 +276,17 @@ class OverlayWindow(QMainWindow):
         layout.addWidget(self.mode_label)
 
         state_row = QHBoxLayout()
-        room_card, self.room_label = self._card("当前房间", "尚未进入一局游戏")
-        resource_card, self.resource_label = self._card(
+        self.room_card, self.room_label = self._card("当前房间", "尚未进入一局游戏")
+        self.resource_card, self.resource_label = self._card(
             "角色资源", "红心 — · 魂心 —\n硬币 — · 钥匙 — · 炸弹 —"
         )
-        state_row.addWidget(room_card)
-        state_row.addWidget(resource_card)
+        state_row.addWidget(self.room_card)
+        state_row.addWidget(self.resource_card)
         layout.addLayout(state_row)
 
-        voice_frame = QFrame()
-        voice_frame.setObjectName("card")
-        voice_layout = QVBoxLayout(voice_frame)
+        self.voice_frame = QFrame()
+        self.voice_frame.setObjectName("card")
+        voice_layout = QVBoxLayout(self.voice_frame)
         voice_header = QHBoxLayout()
         self.voice_enabled = QCheckBox("启用语音")
         self.voice_enabled.setChecked(self.config.voice.enabled)
@@ -290,7 +298,8 @@ class OverlayWindow(QMainWindow):
         voice_header.addWidget(self.voice_status_label)
         voice_layout.addLayout(voice_header)
         device_row = QHBoxLayout()
-        device_row.addWidget(QLabel("输入设备"))
+        self.input_device_label = QLabel("输入设备")
+        device_row.addWidget(self.input_device_label)
         self.input_device_combo = QComboBox()
         self.input_device_combo.setMinimumWidth(230)
         self.input_device_combo.setMinimumHeight(38)
@@ -333,25 +342,25 @@ class OverlayWindow(QMainWindow):
         self.voice_metrics_label.setObjectName("metrics")
         self.voice_metrics_label.setWordWrap(True)
         voice_layout.addWidget(self.voice_metrics_label)
-        layout.addWidget(voice_frame)
+        layout.addWidget(self.voice_frame)
 
-        item_frame = QFrame()
-        item_frame.setObjectName("card")
-        item_layout = QVBoxLayout(item_frame)
-        item_title = QLabel("识别到的道具")
-        item_title.setObjectName("caption")
+        self.item_frame = QFrame()
+        self.item_frame.setObjectName("card")
+        item_layout = QVBoxLayout(self.item_frame)
+        self.item_title = QLabel("识别到的道具")
+        self.item_title.setObjectName("caption")
         self.item_label = QLabel("等待道具房事件")
         self.item_label.setObjectName("value")
         self.item_label.setWordWrap(True)
-        item_layout.addWidget(item_title)
+        item_layout.addWidget(self.item_title)
         item_layout.addWidget(self.item_label)
-        layout.addWidget(item_frame)
+        layout.addWidget(self.item_frame)
 
-        advice_frame = QFrame()
-        advice_frame.setObjectName("adviceCard")
-        advice_layout = QVBoxLayout(advice_frame)
-        advice_caption = QLabel("短建议")
-        advice_caption.setObjectName("caption")
+        self.advice_frame = QFrame()
+        self.advice_frame.setObjectName("adviceCard")
+        advice_layout = QVBoxLayout(self.advice_frame)
+        self.advice_caption = QLabel("短建议")
+        self.advice_caption.setObjectName("caption")
         self.advice_label = QLabel("进入已覆盖的道具房后，这里会显示建议。")
         self.advice_label.setObjectName("advice")
         self.advice_label.setWordWrap(True)
@@ -365,30 +374,30 @@ class OverlayWindow(QMainWindow):
         self.source_label.setOpenExternalLinks(True)
         self.metrics_label = QLabel("置信度 — · 状态序号 —")
         self.metrics_label.setObjectName("metrics")
-        advice_layout.addWidget(advice_caption)
+        advice_layout.addWidget(self.advice_caption)
         advice_layout.addWidget(self.advice_label)
         advice_layout.addWidget(self.reason_label)
         advice_layout.addWidget(self.source_label)
         advice_layout.addWidget(self.metrics_label)
-        layout.addWidget(advice_frame)
+        layout.addWidget(self.advice_frame)
 
-        rag_caption = QLabel("检索调试")
-        rag_caption.setObjectName("caption")
-        layout.addWidget(rag_caption)
-        rag_scroll = QScrollArea()
-        rag_scroll.setObjectName("eventScroll")
-        rag_scroll.setWidgetResizable(True)
-        rag_scroll.setMaximumHeight(105)
+        self.rag_caption = QLabel("检索调试")
+        self.rag_caption.setObjectName("caption")
+        layout.addWidget(self.rag_caption)
+        self.rag_scroll = QScrollArea()
+        self.rag_scroll.setObjectName("eventScroll")
+        self.rag_scroll.setWidgetResizable(True)
+        self.rag_scroll.setMaximumHeight(105)
         self.rag_debug_label = QLabel("尚未执行检索")
         self.rag_debug_label.setObjectName("events")
         self.rag_debug_label.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.rag_debug_label.setWordWrap(True)
-        rag_scroll.setWidget(self.rag_debug_label)
-        layout.addWidget(rag_scroll)
+        self.rag_scroll.setWidget(self.rag_debug_label)
+        layout.addWidget(self.rag_scroll)
 
-        budget_frame = QFrame()
-        budget_frame.setObjectName("card")
-        budget_layout = QVBoxLayout(budget_frame)
+        self.budget_frame = QFrame()
+        self.budget_frame.setObjectName("card")
+        budget_layout = QVBoxLayout(self.budget_frame)
         budget_caption = QLabel("本局费用（估算）")
         budget_caption.setObjectName("caption")
         self.cost_label = QLabel("¥0.000000 · 输入 0 · 输出 0")
@@ -400,23 +409,67 @@ class OverlayWindow(QMainWindow):
         budget_layout.addWidget(budget_caption)
         budget_layout.addWidget(self.cost_label)
         budget_layout.addWidget(self.budget_bar)
-        layout.addWidget(budget_frame)
+        layout.addWidget(self.budget_frame)
 
-        event_caption = QLabel("最近事件")
-        event_caption.setObjectName("caption")
-        layout.addWidget(event_caption)
-        scroll = QScrollArea()
-        scroll.setObjectName("eventScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setMaximumHeight(125)
+        self.event_caption = QLabel("最近事件")
+        self.event_caption.setObjectName("caption")
+        layout.addWidget(self.event_caption)
+        self.event_scroll = QScrollArea()
+        self.event_scroll.setObjectName("eventScroll")
+        self.event_scroll.setWidgetResizable(True)
+        self.event_scroll.setMaximumHeight(125)
         self.events_label = QLabel("暂无事件")
         self.events_label.setObjectName("events")
         self.events_label.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.events_label.setWordWrap(True)
-        scroll.setWidget(self.events_label)
-        layout.addWidget(scroll)
+        self.event_scroll.setWidget(self.events_label)
+        layout.addWidget(self.event_scroll)
+
+        self._compact_hidden_widgets = [
+            self.mode_label,
+            self.room_card,
+            self.resource_card,
+            self.voice_enabled,
+            self.voice_status_label,
+            self.input_device_label,
+            self.input_device_combo,
+            self.ptt_button,
+            self.cancel_voice_button,
+            self.voice_hint_label,
+            self.transcript_label,
+            self.question_label,
+            self.voice_metrics_label,
+            self.item_frame,
+            self.advice_caption,
+            self.reason_label,
+            self.source_label,
+            self.metrics_label,
+            self.rag_caption,
+            self.rag_scroll,
+            self.budget_frame,
+            self.event_caption,
+            self.event_scroll,
+        ]
 
         self.setStyleSheet(_STYLE)
+
+    @Slot()
+    def _toggle_compact_mode(self) -> None:
+        self._compact_mode = not self._compact_mode
+        if self._compact_mode:
+            self._normal_size = self.size()
+        for widget in self._compact_hidden_widgets:
+            widget.setVisible(not self._compact_mode)
+        self.compact_button.setText("□" if self._compact_mode else "—")
+        self.compact_button.setToolTip(
+            "恢复完整界面" if self._compact_mode else "精简模式：只显示输入框和回答框"
+        )
+        self.main_scroll.verticalScrollBar().setValue(0)
+        if self._compact_mode:
+            self.resize(max(440, min(self.width(), 620)), 320)
+            self.question_input.setFocus()
+        elif self._normal_size is not None:
+            self.resize(self._normal_size)
 
     def _card(self, caption: str, value: str) -> tuple[QFrame, QLabel]:
         frame = QFrame()
@@ -858,10 +911,16 @@ QLabel#metrics { color: #83b6a4; font-size: 11px; }
 QLabel#events { color: #aebccc; font-family: Consolas, "Microsoft YaHei UI"; font-size: 11px; padding: 7px; }
 QPushButton#close { background: transparent; color: #aebccc; border: 0; font-size: 20px; width: 26px; }
 QPushButton#close:hover { color: #ffffff; background: #7b3642; border-radius: 8px; }
+QPushButton#windowControl { background: transparent; color: #c8d5e5; border: 0; font-size: 18px; width: 26px; padding: 0; }
+QPushButton#windowControl:hover { color: #ffffff; background: #34465c; border-radius: 8px; }
 QPushButton#primary { background: #3b789e; color: white; border: 0; border-radius: 7px; padding: 8px; font-weight: 700; }
 QPushButton#primary:pressed { background: #28546f; }
 QPushButton { background: #303b4b; color: #edf3ff; border: 0; border-radius: 7px; padding: 7px; }
 QComboBox, QLineEdit { background: #202936; color: #edf3ff; border: 1px solid #46566c; border-radius: 6px; padding: 6px; }
+QComboBox QAbstractItemView { background: #202936; color: #ffffff; border: 1px solid #5b708c; selection-background-color: #3b789e; selection-color: #ffffff; outline: 0; }
+QComboBox QAbstractItemView::item { min-height: 32px; color: #ffffff; padding: 4px 8px; }
+QComboBox QAbstractItemView::item:hover { background: #304d67; color: #ffffff; }
+QComboBox QAbstractItemView::item:selected { background: #3b789e; color: #ffffff; }
 QCheckBox { color: #edf3ff; }
 QScrollArea#eventScroll { background: rgba(20, 24, 31, 180); border: 0; border-radius: 8px; }
 QScrollArea#eventScroll > QWidget > QWidget { background: transparent; }
