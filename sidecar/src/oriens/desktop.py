@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -11,17 +11,22 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QAbstractItemView,
     QFormLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPushButton,
+    QLineEdit,
     QSpinBox,
     QStyle,
     QSystemTrayIcon,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -29,7 +34,24 @@ from PySide6.QtWidgets import (
 from .application import ListeningState, OriensApplication
 from .config import ConfigError, ConfigService
 from .knowledge_pack import KnowledgePackError, KnowledgePackManager
+from .memory import MEMORY_KINDS
 from .ui import OverlayWindow
+
+
+_MEMORY_KIND_LABELS = {
+    "profile": "玩家档案",
+    "stable_preference": "稳定偏好",
+    "guidance_preference": "提示偏好",
+    "milestone": "对局里程碑",
+}
+
+_MEMORY_STATUS_LABELS = {
+    "active": "已启用",
+    "disabled": "已禁用",
+    "pending": "待确认",
+    "conflicted": "已被纠正",
+    "deleted": "已删除",
+}
 
 
 class SettingsDialog(QDialog):
@@ -78,16 +100,20 @@ class SettingsDialog(QDialog):
         self.budget.setRange(0.01, 100.0)
         self.budget.setDecimals(2)
         self.budget.setValue(application.config.budget.run_limit_cny)
+        self.memory_enabled = QCheckBox("启用本地长期记忆")
+        self.memory_enabled.setChecked(application.config.memory.enabled)
         form.addRow("语音", self.voice_enabled)
         form.addRow("按键说话键", self.ptt_key)
         form.addRow("TTS 音量", self.tts_volume)
         form.addRow("TTS 语速", self.tts_rate)
         form.addRow("TTS 音色", self.tts_voice)
         form.addRow("本局预算上限（元）", self.budget)
+        form.addRow("长期记忆", self.memory_enabled)
         form.addRow("当前知识包", self.knowledge_pack)
         layout.addLayout(form)
         note = QLabel(
             "保存后将在下次启动 Oriens 时生效；开发命令的显式配置可能覆盖这些值。"
+            "长期记忆开关也在下次启动时生效；关闭不会自动删除已有数据。"
             "API Key 和业务空间 ID 不会写入此设置。"
         )
         note.setWordWrap(True)
@@ -110,6 +136,7 @@ class SettingsDialog(QDialog):
                 "tts_volume": self.tts_volume.value(),
             },
             "budget": {"run_limit_cny": self.budget.value()},
+            "memory": {"enabled": self.memory_enabled.isChecked()},
         }
         try:
             ConfigService(self.application.paths).update_user_overrides(overrides)
@@ -121,6 +148,215 @@ class SettingsDialog(QDialog):
             return
         QMessageBox.information(self, "设置已保存", "设置将在下次启动 Oriens 时生效。")
         self.accept()
+
+
+class MemoryManagementDialog(QDialog):
+    """通过应用命令管理本机长期记忆，不接触 SQLite 或绝对路径。"""
+
+    def __init__(self, application: OriensApplication, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.application = application
+        self.setWindowTitle("Oriens 长期记忆管理")
+        self.resize(860, 560)
+        layout = QVBoxLayout(self)
+        self.service_status = QLabel()
+        self.service_status.setWordWrap(True)
+        layout.addWidget(self.service_status)
+
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(("类型", "内容", "来源", "创建/更新时间", "状态"))
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.itemSelectionChanged.connect(self._load_selection)
+        layout.addWidget(self.table)
+
+        editor = QFormLayout()
+        self.kind = QComboBox()
+        for value in sorted(MEMORY_KINDS):
+            self.kind.addItem(_MEMORY_KIND_LABELS[value], value)
+        self.content = QLineEdit()
+        self.content.setMaxLength(240)
+        self.content.setPlaceholderText("只添加明确、稳定且适合长期保存的信息")
+        editor.addRow("记忆类型", self.kind)
+        editor.addRow("记忆内容", self.content)
+        layout.addLayout(editor)
+
+        actions = QHBoxLayout()
+        self.add_button = QPushButton("手动添加")
+        self.update_button = QPushButton("保存纠正")
+        self.toggle_button = QPushButton("启用/禁用选中项")
+        self.delete_button = QPushButton("删除选中项")
+        self.clear_button = QPushButton("清空全部长期记忆")
+        self.close_button = QPushButton("关闭")
+        for button in (
+            self.add_button, self.update_button, self.toggle_button,
+            self.delete_button, self.clear_button, self.close_button,
+        ):
+            actions.addWidget(button)
+        layout.addLayout(actions)
+        note = QLabel(
+            "长期记忆只保存在本机。关闭总开关只会停止写入和召回，不会自动删除已有数据；"
+            "删除单条或清空全部数据后无法在 Oriens 中恢复。"
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        self.add_button.clicked.connect(self._add)
+        self.update_button.clicked.connect(self._update)
+        self.toggle_button.clicked.connect(self._toggle)
+        self.delete_button.clicked.connect(self._delete)
+        self.clear_button.clicked.connect(self._clear)
+        self.close_button.clicked.connect(self.accept)
+        self.refresh()
+
+    @Slot()
+    def refresh(self) -> None:
+        try:
+            items = self.application.list_memories()
+            available = self.application.memory.enabled
+        except Exception:
+            items = ()
+            available = False
+            self.service_status.setText("本地长期记忆暂时不可用，当前已安全切换为无记忆模式。")
+        else:
+            self.service_status.setText(
+                "长期记忆已启用，数据仅保存在本机。"
+                if available else
+                "长期记忆当前已关闭。请在设置中启用并重新启动后再管理；已有数据不会被自动删除。"
+            )
+        self.table.setRowCount(0)
+        for item in items:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            values = (
+                _MEMORY_KIND_LABELS.get(item.kind, item.kind),
+                item.content,
+                item.source_summary,
+                _display_memory_time(item.created_at, item.updated_at),
+                _MEMORY_STATUS_LABELS.get(item.status, item.status),
+            )
+            for column, value in enumerate(values):
+                cell = QTableWidgetItem(value)
+                if column == 0:
+                    cell.setData(Qt.ItemDataRole.UserRole, item.id)
+                    cell.setData(Qt.ItemDataRole.UserRole + 1, item.kind)
+                    cell.setData(Qt.ItemDataRole.UserRole + 2, item.status)
+                self.table.setItem(row, column, cell)
+        for button in (
+            self.add_button, self.update_button, self.toggle_button,
+            self.delete_button, self.clear_button,
+        ):
+            button.setEnabled(available)
+
+    def _selected(self) -> tuple[str, str, str] | None:
+        row = self.table.currentRow()
+        if row < 0:
+            return None
+        cell = self.table.item(row, 0)
+        content = self.table.item(row, 1)
+        if cell is None or content is None:
+            return None
+        return (
+            str(cell.data(Qt.ItemDataRole.UserRole)),
+            str(cell.data(Qt.ItemDataRole.UserRole + 1)),
+            str(cell.data(Qt.ItemDataRole.UserRole + 2)),
+        )
+
+    @Slot()
+    def _load_selection(self) -> None:
+        selected = self._selected()
+        if selected is None:
+            return
+        _memory_id, kind, _status = selected
+        self.kind.setCurrentIndex(max(0, self.kind.findData(kind)))
+        item = self.table.item(self.table.currentRow(), 1)
+        if item is not None:
+            self.content.setText(item.text())
+
+    @Slot()
+    def _add(self) -> None:
+        try:
+            self.application.add_memory(str(self.kind.currentData()), self.content.text())
+        except Exception:
+            self._safe_error("这条内容无法保存为长期记忆，请检查类型和内容后重试。")
+            return
+        self.content.clear()
+        self.refresh()
+
+    @Slot()
+    def _update(self) -> None:
+        selected = self._selected()
+        if selected is None:
+            self._safe_error("请先选择要纠正的记忆。")
+            return
+        try:
+            self.application.update_memory(
+                selected[0], str(self.kind.currentData()), self.content.text()
+            )
+        except Exception:
+            self._safe_error("这条记忆暂时无法纠正，请稍后重试。")
+            return
+        self.refresh()
+
+    @Slot()
+    def _toggle(self) -> None:
+        selected = self._selected()
+        if selected is None:
+            self._safe_error("请先选择要启用或禁用的记忆。")
+            return
+        try:
+            self.application.set_memory_item_enabled(selected[0], selected[2] != "active")
+        except Exception:
+            self._safe_error("这条记忆的状态暂时无法更改，请稍后重试。")
+            return
+        self.refresh()
+
+    @Slot()
+    def _delete(self) -> None:
+        selected = self._selected()
+        if selected is None:
+            self._safe_error("请先选择要删除的记忆。")
+            return
+        answer = QMessageBox.question(
+            self, "确认删除长期记忆",
+            "确定删除选中的长期记忆吗？删除后无法在 Oriens 中恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.application.delete_memory(selected[0])
+        except Exception:
+            self._safe_error("这条记忆暂时无法删除，请稍后重试。")
+            return
+        self.refresh()
+
+    @Slot()
+    def _clear(self) -> None:
+        answer = QMessageBox.question(
+            self, "确认清空全部长期记忆",
+            "确定清空全部长期记忆吗？此操作不会关闭功能，但数据无法在 Oriens 中恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.application.clear_memories()
+        except Exception:
+            self._safe_error("长期记忆暂时无法清空，请稍后重试。")
+            return
+        self.refresh()
+
+    def _safe_error(self, message: str) -> None:
+        QMessageBox.warning(self, "长期记忆操作未完成", message)
 
 
 class ControlCenterWindow(QMainWindow):
@@ -162,6 +398,7 @@ class ControlCenterWindow(QMainWindow):
         self.show_overlay_button = QPushButton("显示悬浮窗")
         self.hide_overlay_button = QPushButton("隐藏悬浮窗")
         self.settings_button = QPushButton("打开设置")
+        self.memory_button = QPushButton("管理长期记忆")
         self.exit_button = QPushButton("完全退出 Oriens")
         for button in (
             self.start_button,
@@ -169,6 +406,7 @@ class ControlCenterWindow(QMainWindow):
             self.show_overlay_button,
             self.hide_overlay_button,
             self.settings_button,
+            self.memory_button,
             self.exit_button,
         ):
             row.addWidget(button)
@@ -183,11 +421,16 @@ class ControlCenterWindow(QMainWindow):
         self.show_overlay_button.clicked.connect(controller.show_overlay)
         self.hide_overlay_button.clicked.connect(controller.hide_overlay)
         self.settings_button.clicked.connect(self.open_settings)
+        self.memory_button.clicked.connect(self.open_memory_management)
         self.exit_button.clicked.connect(controller.quit)
 
     @Slot()
     def open_settings(self) -> None:
         SettingsDialog(self.controller.application, self).exec()
+
+    @Slot()
+    def open_memory_management(self) -> None:
+        MemoryManagementDialog(self.controller.application, self).exec()
 
     def refresh(self) -> None:
         snapshot = self.controller.application.runtime_snapshot()
@@ -204,7 +447,7 @@ class ControlCenterWindow(QMainWindow):
         self.status_labels["cost"].setText(
             f"¥{snapshot.run_cost_cny:.6f} / ¥{snapshot.run_budget_cny:.2f}"
         )
-        self.status_labels["memory"].setText("尚未实现")
+        self.status_labels["memory"].setText(snapshot.memory_status)
         listening = snapshot.listening is ListeningState.LISTENING
         self.start_button.setText("恢复监听" if not listening else "监听中")
         self.start_button.setEnabled(not listening)
@@ -365,3 +608,11 @@ def run_desktop(*, application: OriensApplication) -> int:
         return qt_app.exec()
     finally:
         controller.quit()
+
+
+def _display_memory_time(created_at: str, updated_at: str) -> str:
+    created = created_at.replace("T", " ").replace("+00:00", " UTC")
+    updated = updated_at.replace("T", " ").replace("+00:00", " UTC")
+    if created == updated:
+        return created
+    return f"创建 {created}；更新 {updated}"

@@ -19,6 +19,7 @@ build/
 dist/
 
 # Oriens 运行数据
+.oriens-user/
 data/recordings/
 data/logs/
 data/screenshots/

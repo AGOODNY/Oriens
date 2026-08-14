@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
     from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+    from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 except ImportError:
     QApplication = None  # type: ignore[assignment]
 
@@ -27,6 +29,20 @@ class DesktopShellTests(unittest.TestCase):
             LaunchOptions(
                 config_path=Path("config/rag-v2.1-faiss.toml"),
                 log_path=Path(directory) / "missing.log",
+                online=False,
+                enable_vector=False,
+            ),
+        )
+
+    def _build_with_memory(self, directory: str):
+        root = Path(directory)
+        explicit = root / "memory-enabled.toml"
+        explicit.write_text("[memory]\nenabled = true\n", encoding="utf-8")
+        return OriensApplication.build(
+            AppPaths.development(user_data=root / "user"),
+            LaunchOptions(
+                config_path=explicit,
+                log_path=root / "missing.log",
                 online=False,
                 enable_vector=False,
             ),
@@ -158,6 +174,90 @@ class DesktopShellTests(unittest.TestCase):
             QTimer.singleShot(20, controller.quit)
             self.assertEqual(qt_app.exec(), 0)
             self.assertTrue(application.closed)
+
+    def test_memory_management_ui_adds_corrects_toggles_and_deletes(self) -> None:
+        assert QApplication is not None
+        from oriens.desktop import MemoryManagementDialog
+
+        qt_app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as directory:
+            application = self._build_with_memory(directory)
+            dialog = MemoryManagementDialog(application)
+            self.assertNotIn(str(application.paths.memory_dir), dialog.service_status.text())
+            dialog.kind.setCurrentIndex(dialog.kind.findData("guidance_preference"))
+            dialog.content.setText("解释深度偏好：详细")
+            dialog._add()
+            self.assertEqual(dialog.table.rowCount(), 1)
+            dialog.table.selectRow(0)
+            qt_app.processEvents()
+            dialog.content.setText("解释深度偏好：简短")
+            dialog._update()
+            self.assertEqual(dialog.table.item(0, 1).text(), "解释深度偏好：简短")
+            dialog.table.selectRow(0)
+            dialog._toggle()
+            self.assertEqual(application.list_memories()[0].status, "disabled")
+            dialog.table.selectRow(0)
+            with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
+                dialog._delete()
+            self.assertEqual(dialog.table.rowCount(), 1)
+            with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+                dialog._delete()
+            self.assertEqual(dialog.table.rowCount(), 0)
+            dialog.close()
+            application.close()
+
+    def test_memory_clear_requires_confirmation_and_settings_are_restart_scoped(self) -> None:
+        assert QApplication is not None
+        from oriens.desktop import MemoryManagementDialog, SettingsDialog
+
+        qt_app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as directory:
+            application = self._build_with_memory(directory)
+            application.add_memory("profile", "称呼偏好：小林")
+            dialog = MemoryManagementDialog(application)
+            with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.No):
+                dialog._clear()
+            self.assertEqual(len(application.list_memories()), 1)
+            with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+                dialog._clear()
+            self.assertEqual(application.list_memories(), ())
+            settings = SettingsDialog(application)
+            settings.memory_enabled.setChecked(False)
+            with patch.object(QMessageBox, "information"):
+                settings._save()
+            payload = application.paths.user_config_file.read_text(encoding="utf-8")
+            self.assertIn("[memory]", payload)
+            self.assertIn("enabled = false", payload)
+            # 保存只影响下次装配，当前共享连接在完全退出前仍保持有效。
+            self.assertTrue(application.memory.enabled)
+            settings.close()
+            dialog.close()
+            application.close()
+
+    def test_offscreen_memory_ui_full_exit_releases_database(self) -> None:
+        assert QApplication is not None
+        from oriens.desktop import DesktopController, MemoryManagementDialog
+
+        qt_app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as directory:
+            application = self._build_with_memory(directory)
+            controller = DesktopController(application, qt_app, tray_available=False)
+            dialog = MemoryManagementDialog(application)
+            dialog.content.setText("称呼偏好：小林")
+            dialog.kind.setCurrentIndex(dialog.kind.findData("profile"))
+            dialog._add()
+            database_path = application.memory.database_path
+            controller.show_control_center()
+            dialog.show()
+            QTimer.singleShot(20, controller.quit)
+            self.assertEqual(qt_app.exec(), 0)
+            self.assertTrue(application.closed)
+            connection = sqlite3.connect(database_path, timeout=0.2)
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute("ROLLBACK")
+            finally:
+                connection.close()
 
 
 if __name__ == "__main__":

@@ -83,7 +83,7 @@ class AppPaths:
 
     @property
     def memory_dir(self) -> Path:
-        """阶段 4 的保留位置；本阶段不会创建它。"""
+        """阶段 4 本地记忆位置；仅在用户启用真实记忆存储时创建。"""
 
         return self.user_data / "memory"
 

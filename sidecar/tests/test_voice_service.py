@@ -7,7 +7,7 @@ import unittest
 
 from oriens.audio import AudioChunk, AudioDeviceUnavailable, AudioFormat, MemoryMicrophone, QueuedAudioPlayer
 from oriens.budget import BudgetTracker
-from oriens.config import load_config
+from sidecar.tests.test_support import load_test_config as load_config
 from oriens.modeling import ModelRouter
 from oriens.query import QueryEngine
 from oriens.rag import RagService

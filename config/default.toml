@@ -38,6 +38,11 @@ pricing_checked_on = "2026-08-10"
 [budget]
 run_limit_cny = 0.20
 
+[memory]
+enabled = false
+recall_max_items = 3
+recall_max_chars = 360
+
 [audio]
 input_format = "pcm_s16le"
 input_sample_rate = 16000

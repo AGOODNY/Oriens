@@ -8,7 +8,7 @@ import time
 import unittest
 
 from oriens.audio import AudioChunk, AudioFormat
-from oriens.config import load_config
+from sidecar.tests.test_support import load_test_config as load_config
 from oriens.voice import (
     CosyVoiceStreamingTTS,
     QwenRealtimeASR,

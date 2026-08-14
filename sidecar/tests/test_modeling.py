@@ -4,7 +4,7 @@ from threading import Event
 import unittest
 from unittest.mock import patch
 
-from oriens.config import load_config
+from sidecar.tests.test_support import load_test_config as load_config
 from oriens.modeling import ModelRequest, ModelTimeout, QwenOpenAIAdapter
 
 

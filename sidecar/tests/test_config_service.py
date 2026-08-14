@@ -64,6 +64,17 @@ class ConfigServiceTests(unittest.TestCase):
             self.assertIn("chunk_duration_ms = 80", payload)
             self.assertIn("enabled = false", payload)
 
+    def test_memory_enabled_is_whitelisted_and_defaults_off(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = AppPaths.development(self.repository, user_data=Path(directory) / "user")
+            service = ConfigService(paths)
+            self.assertFalse(service.load().memory.enabled)
+            service.save_user_overrides({"memory": {"enabled": True}})
+            self.assertTrue(service.load().memory.enabled)
+            payload = paths.user_config_file.read_text(encoding="utf-8")
+            self.assertIn("[memory]", payload)
+            self.assertIn("enabled = true", payload)
+
 
 if __name__ == "__main__":
     unittest.main()

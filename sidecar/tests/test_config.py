@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from oriens.config import ConfigError, load_api_key, load_config
+from oriens.config import ConfigError, load_api_key
+from sidecar.tests.test_support import load_test_config as load_config
 
 
 class ConfigTests(unittest.TestCase):

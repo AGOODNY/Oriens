@@ -6,7 +6,7 @@ import time
 import unittest
 
 from oriens.audio import AudioChunk, AudioError, AudioFormat, QueuedAudioPlayer, chunk_pcm
-from oriens.config import load_config
+from sidecar.tests.test_support import load_test_config as load_config
 from oriens.voice import VoiceInputRejected, segment_tts_text, validate_recording
 
 

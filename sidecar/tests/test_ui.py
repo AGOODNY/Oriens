@@ -44,7 +44,7 @@ class OverlayTests(unittest.TestCase):
         app = QApplication.instance() or QApplication([])
         with tempfile.TemporaryDirectory() as directory:
             application = OriensApplication.build(
-                AppPaths.development(),
+                AppPaths.development(user_data=Path(directory) / "user"),
                 LaunchOptions(
                     config_path=Path("config/rag-v2.1-faiss.toml"),
                     log_path=Path(directory) / "missing.log",
@@ -185,7 +185,7 @@ class OverlayTests(unittest.TestCase):
         fake = FakeVoiceService()
         with tempfile.TemporaryDirectory() as directory:
             application = OriensApplication.build(
-                AppPaths.development(),
+                AppPaths.development(user_data=Path(directory) / "user"),
                 LaunchOptions(
                     config_path=Path("config/rag-v2.1-faiss.toml"),
                     log_path=Path(directory) / "missing.log",

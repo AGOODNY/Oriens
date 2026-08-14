@@ -6,8 +6,9 @@ import unittest
 
 from oriens.advice import AdviceEngine, AdviceValidationError, StateToken
 from oriens.budget import BudgetTracker
-from oriens.config import load_config
+from sidecar.tests.test_support import load_test_config as load_config
 from oriens.knowledge import LocalItemKnowledgeBase
+from oriens.memory import MemoryContext, MemoryItem
 from oriens.modeling import (
     AdapterResponse,
     ModelAdapter,
@@ -42,9 +43,11 @@ class StaticAdapter(ModelAdapter):
     def __init__(self, content: str) -> None:
         self.content = content
         self.calls = 0
+        self.requests = []
 
     def complete(self, model, model_request: ModelRequest, cancel: Event) -> AdapterResponse:
         self.calls += 1
+        self.requests.append(model_request)
         return AdapterResponse(self.content, ModelUsage(100, 20))
 
 
@@ -140,6 +143,38 @@ class AdviceTests(unittest.TestCase):
         response, _token = self._engine(router).generate(item_event())
         self.assertEqual(adapter.calls, 2)
         self.assertFalse(response.simulated)
+
+    def test_structured_memory_cannot_replace_current_event_or_sources(self) -> None:
+        content = json.dumps(
+            {
+                "advice": "建议拾取。",
+                "reason": "提供开场群体伤害。",
+                "confidence": 0.9,
+                "sources": ["wiki.gg:item/toxic-shock"],
+                "state_seq": 10,
+            }
+        )
+        adapter = StaticAdapter(content)
+        router = ModelRouter(
+            self.config, online=True, api_key="test-only",
+            adapters={"advice": adapter},
+        )
+        item = MemoryItem(
+            id="memory", kind="guidance_preference", content="解释深度偏好：简短",
+            status="active", confidence=1.0, confirmation_level="manual",
+            source_summary="用户手动添加", source_session_id=None, source_run_id=None,
+            created_at="2026-08-14T00:00:00+00:00",
+            updated_at="2026-08-14T00:00:00+00:00", last_used_at=None,
+        )
+        response, _token = self._engine(router).generate(
+            item_event(), memory_context=MemoryContext((item,), len(item.content))
+        )
+        prompt = json.loads(adapter.requests[0].user_prompt)
+        self.assertEqual(prompt["context"]["room_index"], 4)
+        self.assertEqual(prompt["item"]["collectible_id"], 350)
+        self.assertEqual(prompt["long_term_memory"][0]["content"], item.content)
+        self.assertEqual(response.sources[0].id, "wiki.gg:item/toxic-shock")
+        self.assertIn("当前事件状态和本地资料始终优先", adapter.requests[0].system_prompt)
 
     def test_network_failure_falls_back_to_local_simulation(self) -> None:
         adapter = AlwaysFailAdapter("")

@@ -7,7 +7,7 @@ import unittest
 
 from oriens.advice import AdviceEngine
 from oriens.budget import BudgetTracker
-from oriens.config import load_config
+from sidecar.tests.test_support import load_test_config as load_config
 from oriens.knowledge import LocalItemKnowledgeBase
 from oriens.modeling import ModelRouter
 from oriens.protocol import GameEvent

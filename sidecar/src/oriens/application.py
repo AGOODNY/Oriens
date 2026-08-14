@@ -24,7 +24,15 @@ from .config import ConfigService, OriensConfig
 from .credentials import CredentialService
 from .knowledge import LocalItemKnowledgeBase
 from .knowledge_pack import InstalledKnowledgePack, KnowledgePackError, KnowledgePackManager
-from .memory import MemoryStore, NullMemoryStore
+from .memory import (
+    MemoryCandidate,
+    MemoryContext,
+    MemoryItem,
+    MemoryStore,
+    NullMemoryStore,
+    SQLiteMemoryStore,
+    extract_explicit_candidates,
+)
 from .modeling import ModelRouter
 from .paths import AppPaths, RuntimeMode
 from .protocol import EventParseError, GameEvent, parse_event_line
@@ -79,6 +87,7 @@ class RuntimeSnapshot:
     log_connection: str
     rag_status: str
     voice_status: str
+    memory_status: str
     run_cost_cny: float
     run_budget_cny: float
 
@@ -114,30 +123,71 @@ class GameSession:
         current = self._store.state.run_id
         if current and current != previous:
             if self._active_memory_session is not None:
-                self._memory.end_session(self._active_memory_session)
-            self._memory.begin_session(current)
-            self._active_memory_session = current
+                try:
+                    self._memory.end_session(self._active_memory_session)
+                except Exception:
+                    pass
+            try:
+                self._memory.begin_session(current)
+            except Exception:
+                self._active_memory_session = None
+            else:
+                self._active_memory_session = current
         if event.type == "run_ended" and self._active_memory_session is not None:
-            self._memory.end_session(self._active_memory_session)
+            try:
+                self._memory.end_session(self._active_memory_session)
+            except Exception:
+                pass
             self._active_memory_session = None
 
     def close(self) -> None:
         if self._active_memory_session is not None:
-            self._memory.end_session(self._active_memory_session)
+            try:
+                self._memory.end_session(self._active_memory_session)
+            except Exception:
+                pass
             self._active_memory_session = None
 
 
 class MemoryAwareQueryEngine:
-    """只标记记忆接入点；空实现不会改变提示词或保存任何内容。"""
+    """在稳定边界内执行有预算召回和确定性候选提交。"""
 
-    def __init__(self, query: QueryEngine, memory: MemoryStore) -> None:
+    def __init__(
+        self,
+        query: QueryEngine,
+        memory: MemoryStore,
+        *,
+        recall_max_items: int = 3,
+        recall_max_chars: int = 360,
+    ) -> None:
         self._query = query
         self._memory = memory
+        self._recall_max_items = recall_max_items
+        self._recall_max_chars = recall_max_chars
 
     def ask(self, question, state, request_id, cancel=None):
-        self._memory.recall(question)
-        result = self._query.ask(question, state, request_id, cancel)
-        self._memory.submit_candidates(())
+        try:
+            context = self._memory.recall(
+                question,
+                max_items=self._recall_max_items,
+                max_chars=self._recall_max_chars,
+            )
+        except Exception:
+            # 记忆永远不是文字问答的可用性前提。
+            context = None
+        result = self._query.ask(
+            question, state, request_id, cancel, memory_context=context
+        )
+        try:
+            candidates = extract_explicit_candidates(
+                question,
+                session_id=state.run_id,
+                run_id=state.run_id,
+            )
+            self._memory.submit_candidates(candidates)
+        except Exception:
+            # 候选过滤或写入失败不能使已经完成的回答失败。
+            pass
         return result
 
 
@@ -182,6 +232,10 @@ class OriensApplication:
         self._workspace_id = workspace_id
         self._voice_services: list[VoiceService] = []
         self._voice_status = "尚未初始化；文字功能可用"
+        if isinstance(memory, NullMemoryStore):
+            self._memory_status = "长期记忆已关闭"
+        else:
+            self._memory_status = "长期记忆已启用，仅保存在本机"
         self._phase = ApplicationPhase.READY
         self._listening = ListeningState.LISTENING
         self._last_event_at: float | None = None
@@ -221,6 +275,8 @@ class OriensApplication:
             if vector is not None:
                 vector.close()
             raise
+        memory_store: MemoryStore | None = None
+        tailer: LogTailer | None = None
         try:
             knowledge = LocalItemKnowledgeBase.load(config.app.knowledge_path)
             budget = BudgetTracker(config.budget.run_limit_cny)
@@ -233,19 +289,30 @@ class OriensApplication:
                 knowledge, router, budget, rag=rag, game_version=config.rag.game_version
             )
             raw_query = QueryEngine(rag, router, budget, game_version=config.rag.game_version)
-            memory_store = memory or NullMemoryStore()
-            query = MemoryAwareQueryEngine(raw_query, memory_store)
+            memory_store, memory_status = _make_memory_store(paths, config, memory)
+            query = MemoryAwareQueryEngine(
+                raw_query,
+                memory_store,
+                recall_max_items=config.memory.recall_max_items,
+                recall_max_chars=config.memory.recall_max_chars,
+            )
             session = GameSession(memory_store)
             log_path = (options.log_path or default_log_path()).resolve()
             tailer = LogTailer(log_path, from_start=options.from_start)
-            return cls(
+            application = cls(
                 paths=paths, config=config, options=options, knowledge_pack=selected,
                 knowledge=knowledge, budget=budget, router=router, rag=rag,
                 advice_engine=advice, query_engine=query, session=session,
                 tailer=tailer, memory=memory_store, api_key=api_key,
                 workspace_id=workspace_id,
             )
+            application._memory_status = memory_status
+            return application
         except Exception:
+            if tailer is not None:
+                tailer.close()
+            if memory_store is not None:
+                memory_store.close()
             rag.close()
             raise
 
@@ -326,12 +393,53 @@ class OriensApplication:
         if not self._closed:
             self._listening = ListeningState.LISTENING
 
+    def list_memories(self) -> tuple[MemoryItem, ...]:
+        return self.memory.list_items()
+
+    def add_memory(self, kind: str, content: str) -> MemoryItem:
+        return self.memory.add(MemoryCandidate(
+            content=content,
+            source="用户在记忆管理中手动添加",
+            kind=kind,
+            confidence=1.0,
+            confirmation_level="manual",
+            evidence="用户手动添加",
+            source_session_id=self.session.state.run_id,
+            source_run_id=self.session.state.run_id,
+        ))
+
+    def update_memory(self, memory_id: str, kind: str, content: str) -> MemoryItem:
+        return self.memory.update(memory_id, content=content, kind=kind)
+
+    def set_memory_item_enabled(self, memory_id: str, enabled: bool) -> bool:
+        return self.memory.set_item_enabled(memory_id, enabled)
+
+    def delete_memory(self, memory_id: str) -> bool:
+        return self.memory.delete(memory_id)
+
+    def clear_memories(self) -> int:
+        return self.memory.clear_all()
+
     def submit_advice(
         self, event: GameEvent, cancel: Event
     ) -> Future[tuple[AdviceResponse, StateToken]]:
         if self._closed:
             raise RuntimeError("Oriens 正在退出，无法创建新任务。")
-        return self._executor.submit(self.advice_engine.generate, event, cancel)
+        return self._executor.submit(self._generate_advice, event, cancel)
+
+    def _generate_advice(
+        self, event: GameEvent, cancel: Event
+    ) -> tuple[AdviceResponse, StateToken]:
+        context: MemoryContext | None = None
+        try:
+            context = self.memory.recall(
+                "道具建议 提示频率 解释深度",
+                max_items=self.config.memory.recall_max_items,
+                max_chars=self.config.memory.recall_max_chars,
+            )
+        except Exception:
+            pass
+        return self.advice_engine.generate(event, cancel, memory_context=context)
 
     def poll_events(self) -> tuple[GameEvent, ...]:
         """推进日志游标；暂停时丢弃新行，恢复后只处理之后的事件。"""
@@ -421,6 +529,7 @@ class OriensApplication:
             log_connection,
             rag_status,
             self._voice_status,
+            self._memory_status,
             self.budget.run_total_cny,
             self.budget.run_limit_cny,
         )
@@ -485,6 +594,23 @@ def _make_vector_client(config: OriensConfig) -> VectorWorkerClient | None:
         build_timeout_seconds=config.rag.vector_build_timeout_seconds,
         request_timeout_seconds=config.rag.vector_query_timeout_seconds,
     )
+
+
+def _make_memory_store(
+    paths: AppPaths,
+    config: OriensConfig,
+    injected: MemoryStore | None,
+) -> tuple[MemoryStore, str]:
+    if injected is not None:
+        if injected.enabled:
+            return injected, "长期记忆已启用，仅保存在本机"
+        return injected, "长期记忆已关闭"
+    if not config.memory.enabled:
+        return NullMemoryStore(), "长期记忆已关闭"
+    try:
+        return SQLiteMemoryStore(paths.memory_dir), "长期记忆已启用，仅保存在本机"
+    except Exception:
+        return NullMemoryStore(), "长期记忆暂时不可用，已安全切换为无记忆模式"
 
 
 def _config_for_pack(

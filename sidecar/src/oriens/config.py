@@ -56,6 +56,13 @@ class BudgetSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class MemorySettings:
+    enabled: bool
+    recall_max_items: int
+    recall_max_chars: int
+
+
+@dataclass(frozen=True, slots=True)
 class AudioSettings:
     input_format: str
     input_sample_rate: int
@@ -137,6 +144,7 @@ class OriensConfig:
     providers: dict[str, ProviderSettings]
     model_roles: dict[str, ModelRoleSettings]
     budget: BudgetSettings
+    memory: MemorySettings
     rag: RagSettings
     audio: AudioSettings
     voice: VoiceSettings
@@ -223,11 +231,12 @@ def _read_toml(path: Path, label: str) -> dict[str, Any]:
 
 def _parse_config(raw: dict[str, Any], root: Path) -> OriensConfig:
     _reject_unknown(raw, {
-        "app", "providers", "model_roles", "budget", "rag", "audio", "voice"
+        "app", "providers", "model_roles", "budget", "memory", "rag", "audio", "voice"
     }, "配置")
 
     app_raw = _section(raw, "app")
     budget_raw = _section(raw, "budget")
+    memory_raw = _section(raw, "memory")
     rag_raw = _section(raw, "rag")
     app = AppSettings(
         language=_string(app_raw, "language"),
@@ -282,6 +291,14 @@ def _parse_config(raw: dict[str, Any], root: Path) -> OriensConfig:
         raise ConfigError(f"模型角色引用了不存在的提供商：{'、'.join(missing_providers)}")
 
     budget = BudgetSettings(run_limit_cny=_positive_float(budget_raw, "run_limit_cny"))
+    _reject_unknown(
+        memory_raw, {"enabled", "recall_max_items", "recall_max_chars"}, "memory"
+    )
+    memory = MemorySettings(
+        enabled=_optional_boolean(memory_raw, "enabled", False),
+        recall_max_items=_optional_positive_int(memory_raw, "recall_max_items", 3),
+        recall_max_chars=_optional_positive_int(memory_raw, "recall_max_chars", 360),
+    )
     audio_raw = _section(raw, "audio")
     voice_raw = _section(raw, "voice")
     _reject_unknown(app_raw, {"language", "poll_interval_ms", "recent_event_limit", "knowledge_path"}, "app")
@@ -431,12 +448,13 @@ def _parse_config(raw: dict[str, Any], root: Path) -> OriensConfig:
         raise ConfigError("阶段 3 本地播放器仅支持 TTS 输出 PCM；请将 voice.tts_format 设为 pcm")
     if voice.tts_sample_rate != audio.playback_sample_rate:
         raise ConfigError("voice.tts_sample_rate 必须与 audio.playback_sample_rate 一致")
-    return OriensConfig(root, app, providers, roles, budget, rag, audio, voice)
+    return OriensConfig(root, app, providers, roles, budget, memory, rag, audio, voice)
 
 
 _USER_CONFIG_ALLOWED: dict[str, frozenset[str]] = {
     "app": frozenset({"language", "poll_interval_ms", "recent_event_limit"}),
     "budget": frozenset({"run_limit_cny"}),
+    "memory": frozenset({"enabled"}),
     "audio": frozenset({
         "input_format", "input_sample_rate", "input_channels", "input_sample_width_bytes",
         "chunk_duration_ms", "max_recording_seconds", "min_recording_ms",
