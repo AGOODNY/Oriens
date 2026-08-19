@@ -87,6 +87,12 @@ class AppPaths:
 
         return self.user_data / "memory"
 
+    @property
+    def vision_debug_dir(self) -> Path:
+        """仅在用户另行启用调试截图保存后才允许创建。"""
+
+        return self.user_data / "cache" / "vision-debug"
+
     def model_dir_for(self, model_id: str) -> Path:
         safe_name = "".join(
             character if character.isalnum() or character in "._-" else "-"

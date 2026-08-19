@@ -44,6 +44,12 @@ from .state import EventOrderError, StateStore
 from .tailer import LogTailer
 from .voice import CosyVoiceStreamingTTS, QwenRealtimeASR, TerminologyCorrector
 from .voice_service import VoiceCallbacks, VoiceService
+from .vision import FrameCapture, NullVisionService, VisionService
+from .vision_capture import (
+    GameWindowCapture,
+    WindowsGameWindowLocator,
+    WindowsClientDCBackend,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +94,7 @@ class RuntimeSnapshot:
     rag_status: str
     voice_status: str
     memory_status: str
+    vision_status: str
     run_cost_cny: float
     run_budget_cny: float
 
@@ -159,13 +166,17 @@ class MemoryAwareQueryEngine:
         *,
         recall_max_items: int = 3,
         recall_max_chars: int = 360,
+        on_new_question: Callable[[], None] | None = None,
     ) -> None:
         self._query = query
         self._memory = memory
         self._recall_max_items = recall_max_items
         self._recall_max_chars = recall_max_chars
+        self._on_new_question = on_new_question
 
     def ask(self, question, state, request_id, cancel=None):
+        if self._on_new_question is not None:
+            self._on_new_question()
         try:
             context = self._memory.recall(
                 question,
@@ -210,6 +221,7 @@ class OriensApplication:
         session: GameSession,
         tailer: LogTailer,
         memory: MemoryStore,
+        vision: VisionService | NullVisionService,
         api_key: str | None,
         workspace_id: str | None,
     ) -> None:
@@ -226,6 +238,7 @@ class OriensApplication:
         self.session = session
         self.tailer = tailer
         self.memory = memory
+        self.vision = vision
         self.api_key_available = bool(api_key)
         self.workspace_id_available = bool(workspace_id)
         self._api_key = api_key
@@ -251,6 +264,8 @@ class OriensApplication:
         options: LaunchOptions,
         *,
         memory: MemoryStore | None = None,
+        vision: VisionService | NullVisionService | None = None,
+        vision_capture: FrameCapture | None = None,
     ) -> "OriensApplication":
         config = ConfigService(paths).load(options.config_path)
         manager = KnowledgePackManager(paths.knowledge_dir)
@@ -277,6 +292,7 @@ class OriensApplication:
             raise
         memory_store: MemoryStore | None = None
         tailer: LogTailer | None = None
+        vision_service: VisionService | NullVisionService | None = None
         try:
             knowledge = LocalItemKnowledgeBase.load(config.app.knowledge_path)
             budget = BudgetTracker(config.budget.run_limit_cny)
@@ -285,6 +301,9 @@ class OriensApplication:
             api_key = credentials.read(provider.api_key_env)
             workspace_id = credentials.read(config.voice.workspace_id_env)
             router = ModelRouter(config, online=options.online, api_key=api_key)
+            vision_service = _make_vision_service(
+                paths, config, router, vision, vision_capture
+            )
             advice = AdviceEngine(
                 knowledge, router, budget, rag=rag, game_version=config.rag.game_version
             )
@@ -295,6 +314,7 @@ class OriensApplication:
                 memory_store,
                 recall_max_items=config.memory.recall_max_items,
                 recall_max_chars=config.memory.recall_max_chars,
+                on_new_question=vision_service.cancel,
             )
             session = GameSession(memory_store)
             log_path = (options.log_path or default_log_path()).resolve()
@@ -303,7 +323,8 @@ class OriensApplication:
                 paths=paths, config=config, options=options, knowledge_pack=selected,
                 knowledge=knowledge, budget=budget, router=router, rag=rag,
                 advice_engine=advice, query_engine=query, session=session,
-                tailer=tailer, memory=memory_store, api_key=api_key,
+                tailer=tailer, memory=memory_store, vision=vision_service,
+                api_key=api_key,
                 workspace_id=workspace_id,
             )
             application._memory_status = memory_status
@@ -313,6 +334,8 @@ class OriensApplication:
                 tailer.close()
             if memory_store is not None:
                 memory_store.close()
+            if vision_service is not None:
+                vision_service.close()
             rag.close()
             raise
 
@@ -420,6 +443,16 @@ class OriensApplication:
     def clear_memories(self) -> int:
         return self.memory.clear_all()
 
+    def submit_vision(self, question: str = ""):
+        """UI 唯一允许调用的视觉命令；捕获器和模型不暴露给窗口。"""
+
+        if self._closed:
+            raise RuntimeError("Oriens 正在退出，无法创建新任务。")
+        return self.vision.analyze(question, self.session.state)
+
+    def cancel_vision(self) -> None:
+        self.vision.cancel()
+
     def submit_advice(
         self, event: GameEvent, cancel: Event
     ) -> Future[tuple[AdviceResponse, StateToken]]:
@@ -483,6 +516,8 @@ class OriensApplication:
         except EventOrderError:
             return None
         self._last_event_at = time.monotonic()
+        # 任意受信状态变化都会使正在处理的旧截图失效。
+        self.vision.invalidate()
         self.budget.set_run(self.session.state.run_id)
         current_room = (
             self.session.state.context.get("room_index"),
@@ -530,6 +565,7 @@ class OriensApplication:
             rag_status,
             self._voice_status,
             self._memory_status,
+            self.vision.status,
             self.budget.run_total_cny,
             self.budget.run_limit_cny,
         )
@@ -545,6 +581,7 @@ class OriensApplication:
         self._voice_services.clear()
         closers.extend(
             (
+                self.vision.close,
                 lambda: self._executor.shutdown(wait=True, cancel_futures=True),
                 self.tailer.close,
                 self.session.close,
@@ -611,6 +648,30 @@ def _make_memory_store(
         return SQLiteMemoryStore(paths.memory_dir), "长期记忆已启用，仅保存在本机"
     except Exception:
         return NullMemoryStore(), "长期记忆暂时不可用，已安全切换为无记忆模式"
+
+
+def _make_vision_service(
+    paths: AppPaths,
+    config: OriensConfig,
+    router: ModelRouter,
+    injected: VisionService | NullVisionService | None,
+    injected_capture: FrameCapture | None,
+) -> VisionService | NullVisionService:
+    if not config.vision.enabled:
+        return NullVisionService()
+    if injected is not None:
+        return injected
+    capture = injected_capture or GameWindowCapture(
+        WindowsGameWindowLocator(),
+        WindowsClientDCBackend(),
+        require_foreground=config.vision.require_foreground,
+    )
+    return VisionService(
+        config.vision,
+        capture,
+        router,
+        debug_dir=paths.vision_debug_dir,
+    )
 
 
 def _config_for_pack(

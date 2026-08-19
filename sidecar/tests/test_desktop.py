@@ -59,6 +59,7 @@ class DesktopShellTests(unittest.TestCase):
             self.assertIs(controller.application, application)
             self.assertIs(controller.overlay.application, application)
             self.assertIs(controller.overlay.store, application.session)
+            self.assertIs(controller.application.vision, controller.overlay.application.vision)
             self.assertIs(controller.overlay.budget, application.budget)
             self.assertIs(controller.overlay.advice_engine.rag, application.rag)
             self.assertIs(controller.overlay.advice_engine.router, application.router)

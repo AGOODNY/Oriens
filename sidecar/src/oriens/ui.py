@@ -35,6 +35,7 @@ from .query import QueryResponse, QueryToken
 from .protocol import GameEvent
 from .voice import Transcript, VoiceMetrics, VoiceState
 from .voice_service import VoiceCallbacks, VoiceService
+from .vision import VisionError, VisionResult, VisionToken
 
 
 ROOM_NAMES = {
@@ -84,6 +85,11 @@ class _VoiceSignals(QObject):
     answer = Signal(str, object, object)
     failed = Signal(str, str)
     metrics = Signal(str, object)
+
+
+class _VisionSignals(QObject):
+    completed = Signal(object, object)
+    failed = Signal(str)
 
 
 class _ThinkingSpinner(QWidget):
@@ -139,6 +145,7 @@ class OverlayWindow(QMainWindow):
         self._last_event_at: float | None = None
         self._cancel: Event | None = None
         self._future: Future[tuple[AdviceResponse, StateToken]] | None = None
+        self._vision_future: Future[tuple[VisionResult, VisionToken]] | None = None
         self._signals = _AdviceSignals(self)
         self._signals.completed.connect(self._show_advice)
         self._signals.failed.connect(self._show_model_error)
@@ -149,6 +156,9 @@ class OverlayWindow(QMainWindow):
         self._voice_signals.answer.connect(self._show_query_answer)
         self._voice_signals.failed.connect(self._show_voice_error)
         self._voice_signals.metrics.connect(self._show_voice_metrics)
+        self._vision_signals = _VisionSignals(self)
+        self._vision_signals.completed.connect(self._show_vision_result)
+        self._vision_signals.failed.connect(self._show_vision_error)
         self._drag_origin: QPoint | None = None
         self._compact_mode = False
         self._normal_size = None
@@ -325,6 +335,45 @@ class OverlayWindow(QMainWindow):
         voice_layout.addWidget(self.voice_metrics_label)
         layout.addWidget(self.voice_frame)
 
+        self.vision_frame = QFrame()
+        self.vision_frame.setObjectName("card")
+        vision_layout = QVBoxLayout(self.vision_frame)
+        vision_header = QHBoxLayout()
+        vision_title = QLabel("按需视觉补充")
+        vision_title.setObjectName("caption")
+        self.vision_status_label = QLabel(
+            "已启用" if self.application.vision.enabled else "默认关闭"
+        )
+        self.vision_status_label.setObjectName("status")
+        vision_header.addWidget(vision_title)
+        vision_header.addStretch(1)
+        vision_header.addWidget(self.vision_status_label)
+        vision_layout.addLayout(vision_header)
+        vision_buttons = QHBoxLayout()
+        self.vision_button = QPushButton("识别当前游戏画面")
+        self.vision_button.setObjectName("primary")
+        self.vision_button.setEnabled(self.application.vision.enabled)
+        self.vision_button.clicked.connect(self.start_vision)
+        self.cancel_vision_button = QPushButton("取消")
+        self.cancel_vision_button.clicked.connect(self.cancel_vision)
+        vision_buttons.addWidget(self.vision_button, 1)
+        vision_buttons.addWidget(self.cancel_vision_button)
+        vision_layout.addLayout(vision_buttons)
+        self.vision_privacy_label = QLabel(
+            "只捕获已识别的《以撒》游戏窗口客户区，不捕获整个桌面；默认不保存截图。"
+        )
+        self.vision_privacy_label.setObjectName("hint")
+        self.vision_privacy_label.setWordWrap(True)
+        vision_layout.addWidget(self.vision_privacy_label)
+        self.vision_result_label = QLabel("尚未进行视觉识别")
+        self.vision_result_label.setWordWrap(True)
+        self.vision_metrics_label = QLabel("来源 — · 置信度 — · 耗时 —")
+        self.vision_metrics_label.setObjectName("metrics")
+        self.vision_metrics_label.setWordWrap(True)
+        vision_layout.addWidget(self.vision_result_label)
+        vision_layout.addWidget(self.vision_metrics_label)
+        layout.addWidget(self.vision_frame)
+
         self.item_frame = QFrame()
         self.item_frame.setObjectName("card")
         item_layout = QVBoxLayout(self.item_frame)
@@ -434,6 +483,7 @@ class OverlayWindow(QMainWindow):
             self.transcript_label,
             self.question_label,
             self.voice_metrics_label,
+            self.vision_frame,
             self.item_frame,
             self.advice_caption,
             self.reason_label,
@@ -499,6 +549,9 @@ class OverlayWindow(QMainWindow):
         self._recent.appendleft(f"#{event.seq}  {event.type}")
         self.events_label.setText("\n".join(self._recent))
         self._update_state(event)
+        self.vision_status_label.setText("旧视觉结果已失效")
+        self.vision_result_label.setText("游戏状态已变化，需要重新识别当前画面。")
+        self.vision_metrics_label.setText("来源 — · 置信度 — · 耗时 —")
         if event.type in {"room_entered", "floor_changed", "run_started", "run_ended"}:
             self._cancel_pending()
         if event.type == "collectible_spawned":
@@ -640,6 +693,7 @@ class OverlayWindow(QMainWindow):
             self._show_voice_error("", "语音功能未启用或当前离线不可用。")
             return
         self._cancel_pending()
+        self.cancel_vision()
         self.voice_service.press(self.input_device_combo.currentData())
 
     @Slot()
@@ -649,6 +703,7 @@ class OverlayWindow(QMainWindow):
 
     @Slot()
     def _voice_cancel(self) -> None:
+        self.cancel_vision()
         if self.voice_service is not None:
             self.voice_service.cancel()
 
@@ -661,6 +716,7 @@ class OverlayWindow(QMainWindow):
             self._show_voice_error("", "文本问答服务不可用。")
             return
         self._cancel_pending()
+        self.cancel_vision()
         self.question_input.clear()
         request_id = self.voice_service.ask_text(text, speak=self.voice_enabled.isChecked())
         if request_id is not None:
@@ -738,6 +794,68 @@ class OverlayWindow(QMainWindow):
             f"队列峰值 {metrics.queue_peak}"
         )
 
+    @Slot()
+    def start_vision(self) -> None:
+        self._cancel_pending()
+        if self.voice_service is not None:
+            self.voice_service.cancel()
+        question = self.question_input.text().strip()
+        if not any(term in question for term in ("画面", "这个", "选择", "界面")):
+            question = "识别当前画面中游戏状态 API 和本地资料未覆盖的内容"
+        try:
+            future = self.application.submit_vision(question)
+        except (VisionError, RuntimeError) as exc:
+            self._show_vision_error(str(exc))
+            return
+        self._vision_future = future
+        self.vision_status_label.setText("捕获与分析中")
+        self.vision_result_label.setText("正在安全捕获已识别的游戏窗口客户区……")
+        future.add_done_callback(self._on_vision_done)
+
+    def _on_vision_done(
+        self, future: Future[tuple[VisionResult, VisionToken]]
+    ) -> None:
+        try:
+            result, token = future.result()
+        except ModelCancelled:
+            return
+        except Exception as exc:
+            message = str(exc)
+            if not isinstance(exc, VisionError):
+                message = "视觉识别未完成；文字问答仍可使用。"
+            self._vision_signals.failed.emit(message)
+            return
+        self._vision_signals.completed.emit(result, token)
+
+    @Slot(object, object)
+    def _show_vision_result(
+        self, result: VisionResult, token: VisionToken
+    ) -> None:
+        if not self.application.vision.is_token_current(token, self.store.state):
+            self.vision_status_label.setText("过期结果已丢弃")
+            return
+        self.vision_status_label.setText("识别完成" if result.reliable else "无法可靠识别")
+        self.vision_result_label.setText(
+            result.identification + "\n说明：" + result.explanation
+        )
+        self.vision_metrics_label.setText(
+            f"来源：{result.evidence_type} · 置信度 {result.confidence:.0%} · "
+            f"耗时 {result.metrics.total_ms:.1f} ms · 状态序号 {result.state_seq}"
+        )
+
+    @Slot(str)
+    def _show_vision_error(self, message: str) -> None:
+        self.vision_status_label.setText("识别未完成")
+        self.vision_result_label.setText(message)
+        self.vision_metrics_label.setText("视觉不可用时，文字问答、RAG、语音和记忆仍可使用。")
+
+    @Slot()
+    def cancel_vision(self) -> None:
+        self.application.cancel_vision()
+        self._vision_future = None
+        self.vision_status_label.setText("已取消")
+        self.vision_result_label.setText("本次视觉识别已取消。")
+
     @staticmethod
     def _format_rag_debug(response: QueryResponse) -> str:
         lines = [
@@ -806,6 +924,7 @@ class OverlayWindow(QMainWindow):
 
     def suspend_interaction(self) -> None:
         self._cancel_pending()
+        self.cancel_vision()
         if self.voice_service is not None:
             self.voice_service.cancel()
 

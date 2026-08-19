@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import base64
 import json
 from threading import Event
 import time
@@ -35,6 +36,21 @@ class ModelRequest:
     system_prompt: str
     user_prompt: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    images: tuple["ModelImage", ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ModelImage:
+    mime_type: str
+    data: bytes
+
+    def data_url(self) -> str:
+        if self.mime_type not in {"image/jpeg", "image/png"}:
+            raise ModelError("视觉图片格式不受支持")
+        return (
+            f"data:{self.mime_type};base64,"
+            + base64.b64encode(self.data).decode("ascii")
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,15 +92,27 @@ class QwenOpenAIAdapter:
     ) -> AdapterResponse:
         if cancel.is_set():
             raise ModelCancelled("模型任务已取消")
+        user_content: str | list[dict[str, Any]] = model_request.user_prompt
+        if model_request.images:
+            user_content = [{"type": "text", "text": model_request.user_prompt}]
+            user_content.extend(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image.data_url()},
+                }
+                for image in model_request.images
+            )
         body = {
             "model": model.model_id,
             "messages": [
                 {"role": "system", "content": model_request.system_prompt},
-                {"role": "user", "content": model_request.user_prompt},
+                {"role": "user", "content": user_content},
             ],
-            "response_format": {"type": "json_object"},
             "enable_thinking": False,
         }
+        # 配置的视觉角色可能不支持服务端结构化输出；结果由业务层严格校验。
+        if not model_request.images:
+            body["response_format"] = {"type": "json_object"}
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
         endpoint = self._provider.base_url + "/chat/completions"
         outgoing = request.Request(
@@ -179,6 +207,11 @@ class ModelRouter:
     @property
     def online(self) -> bool:
         return self._online
+
+    def available_for(self, role: str) -> bool:
+        """在线凭据可用，或测试/离线闭环显式注入了该角色适配器。"""
+
+        return self._online or role in self._adapters
 
     def complete(
         self,

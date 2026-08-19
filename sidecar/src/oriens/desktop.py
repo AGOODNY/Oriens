@@ -102,6 +102,12 @@ class SettingsDialog(QDialog):
         self.budget.setValue(application.config.budget.run_limit_cny)
         self.memory_enabled = QCheckBox("启用本地长期记忆")
         self.memory_enabled.setChecked(application.config.memory.enabled)
+        self.vision_enabled = QCheckBox("启用按需视觉补充")
+        self.vision_enabled.setChecked(application.config.vision.enabled)
+        self.vision_debug_save = QCheckBox("保存调试截图（仅用于主动排障）")
+        self.vision_debug_save.setChecked(
+            application.config.vision.debug_save_screenshots
+        )
         form.addRow("语音", self.voice_enabled)
         form.addRow("按键说话键", self.ptt_key)
         form.addRow("TTS 音量", self.tts_volume)
@@ -109,11 +115,15 @@ class SettingsDialog(QDialog):
         form.addRow("TTS 音色", self.tts_voice)
         form.addRow("本局预算上限（元）", self.budget)
         form.addRow("长期记忆", self.memory_enabled)
+        form.addRow("视觉补充", self.vision_enabled)
+        form.addRow("视觉调试", self.vision_debug_save)
         form.addRow("当前知识包", self.knowledge_pack)
         layout.addLayout(form)
         note = QLabel(
             "保存后将在下次启动 Oriens 时生效；开发命令的显式配置可能覆盖这些值。"
             "长期记忆开关也在下次启动时生效；关闭不会自动删除已有数据。"
+            "视觉只捕获已识别的游戏窗口，不捕获整个桌面；默认不保存截图。"
+            "视觉与调试截图开关均在下次启动时生效。"
             "API Key 和业务空间 ID 不会写入此设置。"
         )
         note.setWordWrap(True)
@@ -137,6 +147,10 @@ class SettingsDialog(QDialog):
             },
             "budget": {"run_limit_cny": self.budget.value()},
             "memory": {"enabled": self.memory_enabled.isChecked()},
+            "vision": {
+                "enabled": self.vision_enabled.isChecked(),
+                "debug_save_screenshots": self.vision_debug_save.isChecked(),
+            },
         }
         try:
             ConfigService(self.application.paths).update_user_overrides(overrides)
@@ -385,6 +399,7 @@ class ControlCenterWindow(QMainWindow):
             ("voice", "语音"),
             ("cost", "当前会话费用"),
             ("memory", "长期记忆"),
+            ("vision", "视觉补充"),
         ):
             label = QLabel("—")
             label.setWordWrap(True)
@@ -392,25 +407,43 @@ class ControlCenterWindow(QMainWindow):
             status_form.addRow(caption, label)
         layout.addWidget(status_group)
 
-        row = QHBoxLayout()
         self.start_button = QPushButton("启动监听")
         self.pause_button = QPushButton("暂停监听")
         self.show_overlay_button = QPushButton("显示悬浮窗")
         self.hide_overlay_button = QPushButton("隐藏悬浮窗")
         self.settings_button = QPushButton("打开设置")
         self.memory_button = QPushButton("管理长期记忆")
+        self.vision_button = QPushButton("识别当前游戏画面")
+        self.cancel_vision_button = QPushButton("取消视觉识别")
         self.exit_button = QPushButton("完全退出 Oriens")
+        session_row = QHBoxLayout()
         for button in (
             self.start_button,
             self.pause_button,
             self.show_overlay_button,
             self.hide_overlay_button,
+        ):
+            session_row.addWidget(button)
+        layout.addLayout(session_row)
+        management_row = QHBoxLayout()
+        for button in (
             self.settings_button,
             self.memory_button,
             self.exit_button,
         ):
-            row.addWidget(button)
-        layout.addLayout(row)
+            management_row.addWidget(button)
+        layout.addLayout(management_row)
+        vision_group = QGroupBox("按需视觉补充")
+        vision_row = QHBoxLayout(vision_group)
+        vision_note = QLabel("只捕获已识别的游戏窗口；默认不保存截图。")
+        vision_note.setWordWrap(True)
+        vision_row.addWidget(vision_note, 1)
+        for button in (
+            self.vision_button,
+            self.cancel_vision_button,
+        ):
+            vision_row.addWidget(button)
+        layout.addWidget(vision_group)
         self.close_hint = QLabel("关闭此窗口会缩到系统托盘；只有“完全退出”才会停止后台核心。")
         self.close_hint.setWordWrap(True)
         layout.addWidget(self.close_hint)
@@ -422,6 +455,8 @@ class ControlCenterWindow(QMainWindow):
         self.hide_overlay_button.clicked.connect(controller.hide_overlay)
         self.settings_button.clicked.connect(self.open_settings)
         self.memory_button.clicked.connect(self.open_memory_management)
+        self.vision_button.clicked.connect(controller.identify_current_view)
+        self.cancel_vision_button.clicked.connect(controller.cancel_vision)
         self.exit_button.clicked.connect(controller.quit)
 
     @Slot()
@@ -448,6 +483,8 @@ class ControlCenterWindow(QMainWindow):
             f"¥{snapshot.run_cost_cny:.6f} / ¥{snapshot.run_budget_cny:.2f}"
         )
         self.status_labels["memory"].setText(snapshot.memory_status)
+        self.status_labels["vision"].setText(snapshot.vision_status)
+        self.vision_button.setEnabled(self.controller.application.vision.enabled)
         listening = snapshot.listening is ListeningState.LISTENING
         self.start_button.setText("恢复监听" if not listening else "监听中")
         self.start_button.setEnabled(not listening)
@@ -578,6 +615,15 @@ class DesktopController(QObject):
     @Slot()
     def toggle_listening(self) -> None:
         self.pause_listening() if self.application.listening else self.resume_listening()
+
+    @Slot()
+    def identify_current_view(self) -> None:
+        self.show_overlay()
+        self.overlay.start_vision()
+
+    @Slot()
+    def cancel_vision(self) -> None:
+        self.overlay.cancel_vision()
 
     @Slot()
     def quit(self) -> None:

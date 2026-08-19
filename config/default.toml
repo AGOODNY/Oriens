@@ -35,6 +35,15 @@ output_price_per_million_cny = 0.8
 pricing_input_limit_tokens = 32768
 pricing_checked_on = "2026-08-10"
 
+[model_roles.vision]
+provider = "qwen"
+model_id = "qwen3-vl-flash"
+display_name = "千问 3 VL Flash"
+input_price_per_million_cny = 0.15
+output_price_per_million_cny = 1.5
+pricing_input_limit_tokens = 32768
+pricing_checked_on = "2026-08-19"
+
 [budget]
 run_limit_cny = 0.20
 
@@ -42,6 +51,20 @@ run_limit_cny = 0.20
 enabled = false
 recall_max_items = 3
 recall_max_chars = 360
+
+[vision]
+enabled = false
+debug_save_screenshots = false
+require_foreground = true
+min_confidence = 0.72
+max_width = 1280
+max_height = 720
+max_pixels = 921600
+max_encoded_bytes = 1500000
+jpeg_quality = 85
+min_interval_seconds = 5.0
+max_requests_per_run = 8
+budget_limit_cny = 0.05
 
 [audio]
 input_format = "pcm_s16le"
