@@ -108,6 +108,16 @@ class SettingsDialog(QDialog):
         self.vision_debug_save.setChecked(
             application.config.vision.debug_save_screenshots
         )
+        self.realtime_enabled = QCheckBox("启用实时语音实验")
+        self.realtime_enabled.setChecked(application.config.realtime.enabled)
+        self.realtime_vad = QCheckBox("启用 semantic_vad（实验）")
+        self.realtime_vad.setChecked(
+            application.config.realtime.semantic_vad_enabled
+        )
+        self.realtime_debug_audio = QCheckBox("保存 Realtime 调试音频")
+        self.realtime_debug_audio.setChecked(
+            application.config.realtime.debug_save_audio
+        )
         form.addRow("语音", self.voice_enabled)
         form.addRow("按键说话键", self.ptt_key)
         form.addRow("TTS 音量", self.tts_volume)
@@ -117,6 +127,9 @@ class SettingsDialog(QDialog):
         form.addRow("长期记忆", self.memory_enabled)
         form.addRow("视觉补充", self.vision_enabled)
         form.addRow("视觉调试", self.vision_debug_save)
+        form.addRow("语音模式", self.realtime_enabled)
+        form.addRow("语义打断", self.realtime_vad)
+        form.addRow("音频调试", self.realtime_debug_audio)
         form.addRow("当前知识包", self.knowledge_pack)
         layout.addLayout(form)
         note = QLabel(
@@ -124,6 +137,8 @@ class SettingsDialog(QDialog):
             "长期记忆开关也在下次启动时生效；关闭不会自动删除已有数据。"
             "视觉只捕获已识别的游戏窗口，不捕获整个桌面；默认不保存截图。"
             "视觉与调试截图开关均在下次启动时生效。"
+            "实时语音默认关闭；启用后只发送用户主动提交的语音至百炼，默认不保存音频。"
+            "semantic_vad 与调试音频也都默认关闭并在下次启动生效。"
             "API Key 和业务空间 ID 不会写入此设置。"
         )
         note.setWordWrap(True)
@@ -150,6 +165,11 @@ class SettingsDialog(QDialog):
             "vision": {
                 "enabled": self.vision_enabled.isChecked(),
                 "debug_save_screenshots": self.vision_debug_save.isChecked(),
+            },
+            "realtime": {
+                "enabled": self.realtime_enabled.isChecked(),
+                "semantic_vad_enabled": self.realtime_vad.isChecked(),
+                "debug_save_audio": self.realtime_debug_audio.isChecked(),
             },
         }
         try:
@@ -397,6 +417,7 @@ class ControlCenterWindow(QMainWindow):
             ("log", "游戏日志"),
             ("rag", "RAG"),
             ("voice", "语音"),
+            ("realtime", "实时语音实验"),
             ("cost", "当前会话费用"),
             ("memory", "长期记忆"),
             ("vision", "视觉补充"),
@@ -444,6 +465,26 @@ class ControlCenterWindow(QMainWindow):
         ):
             vision_row.addWidget(button)
         layout.addWidget(vision_group)
+        realtime_group = QGroupBox("实时语音实验")
+        realtime_layout = QVBoxLayout(realtime_group)
+        realtime_note = QLabel(
+            "默认使用链式语音。实时模式仅发送你主动提交的语音至百炼，默认不保存音频；"
+            "失败或预算耗尽会自动退回链式语音。"
+        )
+        realtime_note.setWordWrap(True)
+        realtime_layout.addWidget(realtime_note)
+        realtime_row = QHBoxLayout()
+        self.realtime_connect_button = QPushButton("连接实时语音")
+        self.realtime_disconnect_button = QPushButton("断开")
+        self.realtime_cancel_button = QPushButton("取消与打断")
+        for button in (
+            self.realtime_connect_button,
+            self.realtime_disconnect_button,
+            self.realtime_cancel_button,
+        ):
+            realtime_row.addWidget(button)
+        realtime_layout.addLayout(realtime_row)
+        layout.addWidget(realtime_group)
         self.close_hint = QLabel("关闭此窗口会缩到系统托盘；只有“完全退出”才会停止后台核心。")
         self.close_hint.setWordWrap(True)
         layout.addWidget(self.close_hint)
@@ -457,6 +498,9 @@ class ControlCenterWindow(QMainWindow):
         self.memory_button.clicked.connect(self.open_memory_management)
         self.vision_button.clicked.connect(controller.identify_current_view)
         self.cancel_vision_button.clicked.connect(controller.cancel_vision)
+        self.realtime_connect_button.clicked.connect(controller.connect_realtime)
+        self.realtime_disconnect_button.clicked.connect(controller.disconnect_realtime)
+        self.realtime_cancel_button.clicked.connect(controller.cancel_realtime)
         self.exit_button.clicked.connect(controller.quit)
 
     @Slot()
@@ -479,12 +523,25 @@ class ControlCenterWindow(QMainWindow):
         self.status_labels["log"].setText(snapshot.log_connection)
         self.status_labels["rag"].setText(snapshot.rag_status)
         self.status_labels["voice"].setText(snapshot.voice_status)
+        rt = snapshot.realtime
+        estimate = "估算" if rt.estimated else "服务端用量"
+        self.status_labels["realtime"].setText(
+            f"{rt.state.value} · {rt.status}\n"
+            f"{rt.session_seconds / 60:.1f} 分钟 · {rt.turns} 轮 · "
+            f"¥{rt.estimated_cost_cny:.6f}（{estimate}） · 预算 {rt.budget_progress:.0%} · "
+            f"semantic_vad {'开' if rt.semantic_vad else '关'}\n"
+            f"Token：文本/图片入 {rt.text_image_input_tokens} · 音频入 {rt.audio_input_tokens} · "
+            f"文本出 {rt.text_output_tokens} · 音频出 {rt.audio_output_tokens}"
+        )
         self.status_labels["cost"].setText(
             f"¥{snapshot.run_cost_cny:.6f} / ¥{snapshot.run_budget_cny:.2f}"
         )
         self.status_labels["memory"].setText(snapshot.memory_status)
         self.status_labels["vision"].setText(snapshot.vision_status)
         self.vision_button.setEnabled(self.controller.application.vision.enabled)
+        self.realtime_connect_button.setEnabled(rt.enabled and not rt.connected)
+        self.realtime_disconnect_button.setEnabled(rt.connected)
+        self.realtime_cancel_button.setEnabled(rt.connected)
         listening = snapshot.listening is ListeningState.LISTENING
         self.start_button.setText("恢复监听" if not listening else "监听中")
         self.start_button.setEnabled(not listening)
@@ -565,6 +622,7 @@ class DesktopController(QObject):
 
     @Slot()
     def _tick(self) -> None:
+        self.application.realtime.maintenance()
         for event in self.application.poll_events():
             self.overlay.handle_event(event)
         self.state_changed.emit()
@@ -572,6 +630,7 @@ class DesktopController(QObject):
     @Slot()
     def _refresh_views(self) -> None:
         self.control_center.refresh()
+        self.overlay.refresh_realtime()
         snapshot = self.application.runtime_snapshot()
         if self.tray is not None:
             self.overlay_action.setText("隐藏悬浮窗" if self.overlay.isVisible() else "显示悬浮窗")
@@ -624,6 +683,21 @@ class DesktopController(QObject):
     @Slot()
     def cancel_vision(self) -> None:
         self.overlay.cancel_vision()
+
+    @Slot()
+    def connect_realtime(self) -> None:
+        self.application.realtime.connect()
+        self.state_changed.emit()
+
+    @Slot()
+    def disconnect_realtime(self) -> None:
+        self.application.realtime.disconnect()
+        self.state_changed.emit()
+
+    @Slot()
+    def cancel_realtime(self) -> None:
+        self.application.realtime.cancel()
+        self.state_changed.emit()
 
     @Slot()
     def quit(self) -> None:

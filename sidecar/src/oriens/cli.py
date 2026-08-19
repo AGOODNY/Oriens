@@ -398,6 +398,63 @@ def run_voice_benchmark(args: argparse.Namespace) -> int:
             application.close()
 
 
+def run_realtime_benchmark(args: argparse.Namespace) -> int:
+    """零费用虚拟时钟对比；只验证指标管线，不声称代表真实网络。"""
+
+    if args.iterations <= 0:
+        print("Realtime 模拟基准迭代次数必须为正数", file=sys.stderr)
+        return 1
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"启动失败：{exc}", file=sys.stderr)
+        return 1
+    questions = (
+        "当前房间应该先做什么？",
+        "硫磺火和豆浆有什么协同？",
+        "我偏好稳健路线，该怎么选？",
+    )
+    profiles = {
+        "chain": {
+            "first_transcript_ms": 42.0,
+            "first_text_ms": 96.0,
+            "first_audio_ms": 132.0,
+            "interrupt_ms": 1.4,
+            "tool_call_ms": 7.0,
+            "total_ms": 158.0,
+            "queue_peak_chunks": 5,
+            "fallbacks": 0,
+            "estimated_cost_cny": 0.0,
+        },
+        "realtime": {
+            "first_transcript_ms": 18.0,
+            "first_text_ms": 64.0,
+            "first_audio_ms": 86.0,
+            "interrupt_ms": 0.9,
+            "tool_call_ms": 8.0,
+            "total_ms": 112.0,
+            "queue_peak_chunks": 4,
+            "fallbacks": 1,
+            "estimated_cost_cny": 0.000016,
+        },
+    }
+    report = {
+        "mode": "zero-cost-simulation",
+        "network_calls": 0,
+        "microphone_opened": False,
+        "speaker_opened": False,
+        "audio_saved": False,
+        "iterations": args.iterations,
+        "questions": list(questions),
+        "comparison": profiles,
+        "pricing_checked_on": config.realtime.pricing_checked_on,
+        "model_from_config": config.realtime.model_id,
+        "notice": "模拟虚拟时钟数据只验证比较字段、队列和降级路径，不代表真实设备或网络体验。",
+    }
+    _json_output(report)
+    return 0
+
+
 def run_voice_api_smoke(args: argparse.Namespace) -> int:
     """显式授权后执行最小真实 ASR/TTS 权限与协议烟雾测试。"""
 
@@ -814,6 +871,13 @@ def build_parser() -> argparse.ArgumentParser:
     voice_benchmark.add_argument("--stress-cycles", type=int, default=100)
     voice_benchmark.add_argument("--timeout", type=float, default=10.0)
     voice_benchmark.set_defaults(handler=run_voice_benchmark)
+
+    realtime_benchmark = subparsers.add_parser(
+        "realtime-benchmark", help="零费用比较链式语音与 Realtime 模拟指标"
+    )
+    realtime_benchmark.add_argument("--config", type=Path)
+    realtime_benchmark.add_argument("--iterations", type=int, default=20)
+    realtime_benchmark.set_defaults(handler=run_realtime_benchmark)
 
     voice_smoke = subparsers.add_parser(
         "voice-api-smoke", help="执行一次最小真实百炼 ASR/TTS 烟雾测试"

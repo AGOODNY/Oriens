@@ -93,6 +93,12 @@ class AppPaths:
 
         return self.user_data / "cache" / "vision-debug"
 
+    @property
+    def realtime_debug_dir(self) -> Path:
+        """仅在用户另行启用 Realtime 调试音频保存后才允许创建。"""
+
+        return self.user_data / "cache" / "realtime-audio-debug"
+
     def model_dir_for(self, model_id: str) -> Path:
         safe_name = "".join(
             character if character.isalnum() or character in "._-" else "-"

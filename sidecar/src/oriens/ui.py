@@ -166,6 +166,7 @@ class OverlayWindow(QMainWindow):
         self._allow_close = False
         self.voice_service = voice_service
         self._injected_voice_service = voice_service is not None
+        self._using_realtime = False
 
         self.setWindowTitle("Oriens：你的游戏向导")
         self.setWindowFlags(
@@ -308,6 +309,23 @@ class OverlayWindow(QMainWindow):
         ptt_row.addWidget(self.ptt_button, 1)
         ptt_row.addWidget(self.cancel_voice_button)
         voice_layout.addLayout(ptt_row)
+        realtime_row = QHBoxLayout()
+        self.realtime_mode_label = QLabel("链式语音（默认）")
+        self.realtime_mode_label.setObjectName("status")
+        self.realtime_connect_button = QPushButton("连接实时实验")
+        self.realtime_disconnect_button = QPushButton("断开")
+        self.realtime_connect_button.clicked.connect(self._connect_realtime)
+        self.realtime_disconnect_button.clicked.connect(self._disconnect_realtime)
+        realtime_row.addWidget(self.realtime_mode_label, 1)
+        realtime_row.addWidget(self.realtime_connect_button)
+        realtime_row.addWidget(self.realtime_disconnect_button)
+        voice_layout.addLayout(realtime_row)
+        self.realtime_metrics_label = QLabel(
+            "Realtime 0.0 分钟 · 0 轮 · ¥0.000000 · 预算 0% · semantic_vad 关"
+        )
+        self.realtime_metrics_label.setObjectName("metrics")
+        self.realtime_metrics_label.setWordWrap(True)
+        voice_layout.addWidget(self.realtime_metrics_label)
         self.voice_hint_label = QLabel("默认不监听；只有按住说话时才打开麦克风。")
         self.voice_hint_label.setObjectName("hint")
         self.voice_hint_label.setWordWrap(True)
@@ -479,6 +497,10 @@ class OverlayWindow(QMainWindow):
             self.input_device_combo,
             self.ptt_button,
             self.cancel_voice_button,
+            self.realtime_mode_label,
+            self.realtime_connect_button,
+            self.realtime_disconnect_button,
+            self.realtime_metrics_label,
             self.voice_hint_label,
             self.transcript_label,
             self.question_label,
@@ -659,7 +681,11 @@ class OverlayWindow(QMainWindow):
         )
         progress = min(1.0, cost.run_total_cny / self.budget.run_limit_cny)
         self.budget_bar.setValue(round(progress * 1000))
-        if self.voice_enabled.isChecked() and self.voice_service is not None:
+        if (
+            self.voice_enabled.isChecked()
+            and self.voice_service is not None
+            and not self.application.realtime.snapshot.connected
+        ):
             self.voice_service.speak_validated(response.advice)
 
     def _populate_audio_devices(self) -> None:
@@ -694,16 +720,28 @@ class OverlayWindow(QMainWindow):
             return
         self._cancel_pending()
         self.cancel_vision()
-        self.voice_service.press(self.input_device_combo.currentData())
+        realtime = self.application.realtime
+        if realtime.snapshot.available:
+            self.voice_service.cancel()
+            self._using_realtime = (
+                realtime.press(self.input_device_combo.currentData()) is not None
+            )
+        else:
+            self._using_realtime = False
+            self.voice_service.press(self.input_device_combo.currentData())
 
     @Slot()
     def _voice_release(self) -> None:
-        if self.voice_service is not None:
+        if self._using_realtime:
+            self.application.realtime.release()
+        elif self.voice_service is not None:
             self.voice_service.release()
 
     @Slot()
     def _voice_cancel(self) -> None:
         self.cancel_vision()
+        self.application.realtime.cancel()
+        self._using_realtime = False
         if self.voice_service is not None:
             self.voice_service.cancel()
 
@@ -717,6 +755,8 @@ class OverlayWindow(QMainWindow):
             return
         self._cancel_pending()
         self.cancel_vision()
+        self.application.realtime.cancel()
+        self._using_realtime = False
         self.question_input.clear()
         request_id = self.voice_service.ask_text(text, speak=self.voice_enabled.isChecked())
         if request_id is not None:
@@ -799,6 +839,7 @@ class OverlayWindow(QMainWindow):
         self._cancel_pending()
         if self.voice_service is not None:
             self.voice_service.cancel()
+        self.application.realtime.cancel()
         question = self.question_input.text().strip()
         if not any(term in question for term in ("画面", "这个", "选择", "界面")):
             question = "识别当前画面中游戏状态 API 和本地资料未覆盖的内容"
@@ -902,8 +943,57 @@ class OverlayWindow(QMainWindow):
             self.metrics_label.show()
 
     def _update_connection(self) -> None:
+        self.refresh_realtime()
         if self.connection_label.text() not in {"正在生成建议", "建议已就绪"}:
             self.connection_label.setText(self.application.runtime_snapshot().log_connection)
+
+    def refresh_realtime(self) -> None:
+        snapshot = self.application.realtime.snapshot
+        self.realtime_mode_label.setText(snapshot.state.value)
+        self.realtime_metrics_label.setText(
+            f"{snapshot.status}\n{snapshot.session_seconds / 60:.1f} 分钟 · "
+            f"{snapshot.turns} 轮 · ¥{snapshot.estimated_cost_cny:.6f} · "
+            f"预算 {snapshot.budget_progress:.0%} · "
+            f"semantic_vad {'开' if snapshot.semantic_vad else '关'}\n"
+            f"Token 文本/图片入 {snapshot.text_image_input_tokens} · "
+            f"音频入 {snapshot.audio_input_tokens} · 文本出 {snapshot.text_output_tokens} · "
+            f"音频出 {snapshot.audio_output_tokens}"
+        )
+        self.realtime_connect_button.setEnabled(snapshot.enabled and not snapshot.connected)
+        self.realtime_disconnect_button.setEnabled(snapshot.connected)
+        if snapshot.transcript:
+            self.transcript_label.setText("Realtime 字幕：" + snapshot.transcript)
+        if snapshot.response_text:
+            self._stop_thinking()
+            self.advice_label.setText(snapshot.response_text)
+            self.reason_label.setText("Realtime 实验输出；结构化状态与本地来源优先。")
+        if snapshot.enabled and snapshot.connected:
+            self.voice_hint_label.setText(
+                "实时语音实验：只发送主动提交的语音至百炼；默认不保存音频。"
+            )
+        if snapshot.state.value == "已退回链式语音":
+            self._using_realtime = False
+            self.voice_hint_label.setText("已退回链式语音；文字问答、RAG、记忆和视觉仍可用。")
+        devices_available = (
+            self.input_device_combo.count() > 0
+            and self.input_device_combo.currentData() is not None
+        )
+        self.ptt_button.setEnabled(
+            self.voice_enabled.isChecked()
+            and devices_available
+            and (snapshot.available or self.voice_service is not None)
+        )
+
+    @Slot()
+    def _connect_realtime(self) -> None:
+        self.application.realtime.connect()
+        self.refresh_realtime()
+
+    @Slot()
+    def _disconnect_realtime(self) -> None:
+        self.application.realtime.disconnect()
+        self._using_realtime = False
+        self.refresh_realtime()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt API
         if not self._allow_close:
@@ -925,6 +1015,8 @@ class OverlayWindow(QMainWindow):
     def suspend_interaction(self) -> None:
         self._cancel_pending()
         self.cancel_vision()
+        self.application.realtime.cancel()
+        self._using_realtime = False
         if self.voice_service is not None:
             self.voice_service.cancel()
 

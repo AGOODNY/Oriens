@@ -27,6 +27,19 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.voice.asr_price_per_second_cny, 0.00033)
         self.assertEqual(config.voice.tts_price_per_10k_chars_cny, 1.0)
         self.assertEqual(config.voice.pricing_checked_on, "2026-08-12")
+        self.assertFalse(config.realtime.enabled)
+        self.assertFalse(config.realtime.semantic_vad_enabled)
+        self.assertEqual(config.realtime.vad_threshold, 0.5)
+        self.assertEqual(config.realtime.vad_silence_duration_ms, 800)
+        self.assertFalse(config.realtime.debug_save_audio)
+        self.assertTrue(config.realtime.model_id)
+        self.assertIn("{workspace_id}", config.realtime.endpoint)
+        self.assertEqual(config.realtime.input_sample_rate, 16000)
+        self.assertEqual(config.realtime.output_sample_rate, 24000)
+        self.assertEqual(config.realtime.proactive_reconnect_minutes, 90.0)
+        self.assertEqual(config.realtime.context_max_turns, 80)
+        self.assertEqual(config.realtime.context_audio_seconds, 480.0)
+        self.assertEqual(config.realtime.pricing_checked_on, "2026-08-19")
 
     def test_loads_secret_from_env_file_without_mutating_environment(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

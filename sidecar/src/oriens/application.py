@@ -40,6 +40,7 @@ from .query import QueryEngine
 from .rag import RagError, RagService
 from .rag_pipeline import build_corpus, build_keyword_index
 from .rag_worker import VectorWorkerClient
+from .realtime import NullRealtimeService, QwenOmniRealtimeService, RealtimeSnapshot
 from .state import EventOrderError, StateStore
 from .tailer import LogTailer
 from .voice import CosyVoiceStreamingTTS, QwenRealtimeASR, TerminologyCorrector
@@ -97,6 +98,7 @@ class RuntimeSnapshot:
     vision_status: str
     run_cost_cny: float
     run_budget_cny: float
+    realtime: RealtimeSnapshot
 
 
 class GameSession:
@@ -222,6 +224,7 @@ class OriensApplication:
         tailer: LogTailer,
         memory: MemoryStore,
         vision: VisionService | NullVisionService,
+        realtime: QwenOmniRealtimeService | NullRealtimeService,
         api_key: str | None,
         workspace_id: str | None,
     ) -> None:
@@ -239,11 +242,13 @@ class OriensApplication:
         self.tailer = tailer
         self.memory = memory
         self.vision = vision
+        self.realtime = realtime
         self.api_key_available = bool(api_key)
         self.workspace_id_available = bool(workspace_id)
         self._api_key = api_key
         self._workspace_id = workspace_id
         self._voice_services: list[VoiceService] = []
+        self._voice_assembly: VoiceAssembly | None = None
         self._voice_status = "尚未初始化；文字功能可用"
         if isinstance(memory, NullMemoryStore):
             self._memory_status = "长期记忆已关闭"
@@ -266,6 +271,7 @@ class OriensApplication:
         memory: MemoryStore | None = None,
         vision: VisionService | NullVisionService | None = None,
         vision_capture: FrameCapture | None = None,
+        realtime: QwenOmniRealtimeService | NullRealtimeService | None = None,
     ) -> "OriensApplication":
         config = ConfigService(paths).load(options.config_path)
         manager = KnowledgePackManager(paths.knowledge_dir)
@@ -293,6 +299,7 @@ class OriensApplication:
         memory_store: MemoryStore | None = None
         tailer: LogTailer | None = None
         vision_service: VisionService | NullVisionService | None = None
+        realtime_service: QwenOmniRealtimeService | NullRealtimeService | None = None
         try:
             knowledge = LocalItemKnowledgeBase.load(config.app.knowledge_path)
             budget = BudgetTracker(config.budget.run_limit_cny)
@@ -307,16 +314,31 @@ class OriensApplication:
             advice = AdviceEngine(
                 knowledge, router, budget, rag=rag, game_version=config.rag.game_version
             )
-            raw_query = QueryEngine(rag, router, budget, game_version=config.rag.game_version)
             memory_store, memory_status = _make_memory_store(paths, config, memory)
+            session = GameSession(memory_store)
+            realtime_service = _make_realtime_service(
+                paths,
+                config,
+                options,
+                api_key,
+                workspace_id,
+                session,
+                rag,
+                memory_store,
+                realtime,
+            )
+            def invalidate_async_context() -> None:
+                vision_service.cancel()
+                realtime_service.invalidate()
+
+            raw_query = QueryEngine(rag, router, budget, game_version=config.rag.game_version)
             query = MemoryAwareQueryEngine(
                 raw_query,
                 memory_store,
                 recall_max_items=config.memory.recall_max_items,
                 recall_max_chars=config.memory.recall_max_chars,
-                on_new_question=vision_service.cancel,
+                on_new_question=invalidate_async_context,
             )
-            session = GameSession(memory_store)
             log_path = (options.log_path or default_log_path()).resolve()
             tailer = LogTailer(log_path, from_start=options.from_start)
             application = cls(
@@ -324,6 +346,7 @@ class OriensApplication:
                 knowledge=knowledge, budget=budget, router=router, rag=rag,
                 advice_engine=advice, query_engine=query, session=session,
                 tailer=tailer, memory=memory_store, vision=vision_service,
+                realtime=realtime_service,
                 api_key=api_key,
                 workspace_id=workspace_id,
             )
@@ -336,6 +359,8 @@ class OriensApplication:
                 memory_store.close()
             if vision_service is not None:
                 vision_service.close()
+            if realtime_service is not None:
+                realtime_service.close()
             rag.close()
             raise
 
@@ -344,6 +369,9 @@ class OriensApplication:
         callbacks: VoiceCallbacks,
     ) -> VoiceAssembly:
         """在 QApplication 已存在后创建 Qt 音频基础设施。"""
+
+        if self._voice_assembly is not None:
+            return self._voice_assembly
 
         unavailable: str | None = None
         try:
@@ -385,6 +413,7 @@ class OriensApplication:
             state_provider=lambda: self.session.state,
             callbacks=callbacks,
         )
+        self.realtime.bind_audio(microphone, player)
         self._voice_services.append(service)
         if asr is not None:
             self._voice_status = "语音可用"
@@ -398,7 +427,8 @@ class OriensApplication:
             self._voice_status = "缺少开发凭据，语音不可用；文字功能可用"
         else:
             self._voice_status = "语音工作区不可用；文字功能可用"
-        return VoiceAssembly(service, asr is not None, unavailable)
+        self._voice_assembly = VoiceAssembly(service, asr is not None, unavailable)
+        return self._voice_assembly
 
     @property
     def closed(self) -> bool:
@@ -518,6 +548,9 @@ class OriensApplication:
         self._last_event_at = time.monotonic()
         # 任意受信状态变化都会使正在处理的旧截图失效。
         self.vision.invalidate()
+        # Realtime 的转录、工具、文本和音频对所有状态变化都采用相同过期语义。
+        if event.type != "heartbeat":
+            self.realtime.invalidate()
         self.budget.set_run(self.session.state.run_id)
         current_room = (
             self.session.state.context.get("room_index"),
@@ -568,6 +601,7 @@ class OriensApplication:
             self.vision.status,
             self.budget.run_total_cny,
             self.budget.run_limit_cny,
+            self.realtime.snapshot,
         )
 
     def close(self) -> None:
@@ -577,8 +611,10 @@ class OriensApplication:
             self._closed = True
             self._phase = ApplicationPhase.EXITING
             self._listening = ListeningState.STOPPED
-        closers = [service.close for service in tuple(self._voice_services)]
+        closers = [self.realtime.close]
+        closers.extend(service.close for service in tuple(self._voice_services))
         self._voice_services.clear()
+        self._voice_assembly = None
         closers.extend(
             (
                 self.vision.close,
@@ -648,6 +684,37 @@ def _make_memory_store(
         return SQLiteMemoryStore(paths.memory_dir), "长期记忆已启用，仅保存在本机"
     except Exception:
         return NullMemoryStore(), "长期记忆暂时不可用，已安全切换为无记忆模式"
+
+
+def _make_realtime_service(
+    paths: AppPaths,
+    config: OriensConfig,
+    options: LaunchOptions,
+    api_key: str | None,
+    workspace_id: str | None,
+    session: GameSession,
+    rag: RagService,
+    memory: MemoryStore,
+    injected: QwenOmniRealtimeService | NullRealtimeService | None,
+) -> QwenOmniRealtimeService | NullRealtimeService:
+    if injected is not None:
+        return injected
+    if not config.realtime.enabled:
+        return NullRealtimeService("链式语音（默认）；实时语音实验未启用")
+    if not options.online:
+        return NullRealtimeService("实时语音实验需要在线模式；已使用链式语音")
+    if not api_key or not workspace_id:
+        return NullRealtimeService("实时语音凭据不可用；已退回链式语音")
+    return QwenOmniRealtimeService(
+        settings=config.realtime,
+        api_key=api_key,
+        workspace_id=workspace_id,
+        state_provider=lambda: session.state,
+        rag=rag,
+        memory=memory,
+        game_version=config.rag.game_version,
+        debug_dir=paths.realtime_debug_dir,
+    )
 
 
 def _make_vision_service(

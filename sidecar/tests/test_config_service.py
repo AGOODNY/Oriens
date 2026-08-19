@@ -9,6 +9,26 @@ from oriens.paths import AppPaths
 
 
 class ConfigServiceTests(unittest.TestCase):
+    def test_realtime_fields_are_whitelisted_and_default_off(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = AppPaths.development(user_data=Path(directory) / "user")
+            service = ConfigService(paths)
+            self.assertFalse(service.load().realtime.enabled)
+            service.save_user_overrides({
+                "realtime": {
+                    "enabled": True,
+                    "semantic_vad_enabled": True,
+                    "debug_save_audio": False,
+                }
+            })
+            loaded = service.load()
+            self.assertTrue(loaded.realtime.enabled)
+            self.assertTrue(loaded.realtime.semantic_vad_enabled)
+            text = paths.user_config_file.read_text(encoding="utf-8")
+            self.assertNotIn("model_id", text)
+            self.assertNotIn("endpoint", text)
+            self.assertNotIn("workspace", text)
+
     def setUp(self) -> None:
         self.repository = Path(__file__).resolve().parents[2]
 

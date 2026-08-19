@@ -123,6 +123,44 @@ class VoiceSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class RealtimeSettings:
+    enabled: bool
+    semantic_vad_enabled: bool
+    vad_threshold: float
+    vad_silence_duration_ms: int
+    debug_save_audio: bool
+    provider: str
+    model_id: str
+    endpoint: str
+    voice: str
+    input_format: str
+    input_sample_rate: int
+    output_format: str
+    output_sample_rate: int
+    connect_timeout_seconds: float
+    event_timeout_seconds: float
+    tool_timeout_seconds: float
+    max_retries: int
+    reconnect_delay_seconds: float
+    proactive_reconnect_minutes: float
+    session_max_minutes: float
+    context_max_turns: int
+    context_audio_seconds: float
+    summary_max_chars: int
+    max_tool_result_chars: int
+    soft_budget_cny: float
+    hard_budget_cny: float
+    text_image_input_price_per_million_cny: float
+    audio_input_price_per_million_cny: float
+    text_output_price_per_million_cny: float
+    audio_output_price_per_million_cny: float
+    estimated_input_audio_tokens_per_second: float
+    estimated_output_audio_tokens_per_second: float
+    estimated_chars_per_text_token: float
+    pricing_checked_on: str
+
+
+@dataclass(frozen=True, slots=True)
 class RagSettings:
     source_path: Path
     chunks_path: Path
@@ -165,6 +203,7 @@ class OriensConfig:
     rag: RagSettings
     audio: AudioSettings
     voice: VoiceSettings
+    realtime: RealtimeSettings
 
     def provider_for(self, role: str) -> tuple[ProviderSettings, ModelRoleSettings]:
         try:
@@ -248,7 +287,8 @@ def _read_toml(path: Path, label: str) -> dict[str, Any]:
 
 def _parse_config(raw: dict[str, Any], root: Path) -> OriensConfig:
     _reject_unknown(raw, {
-        "app", "providers", "model_roles", "budget", "memory", "vision", "rag", "audio", "voice"
+        "app", "providers", "model_roles", "budget", "memory", "vision", "rag", "audio", "voice",
+        "realtime",
     }, "配置")
 
     app_raw = _section(raw, "app")
@@ -350,6 +390,7 @@ def _parse_config(raw: dict[str, Any], root: Path) -> OriensConfig:
     )
     audio_raw = _section(raw, "audio")
     voice_raw = _section(raw, "voice")
+    realtime_raw = _section(raw, "realtime")
     _reject_unknown(app_raw, {"language", "poll_interval_ms", "recent_event_limit", "knowledge_path"}, "app")
     _reject_unknown(budget_raw, {"run_limit_cny"}, "budget")
     _reject_unknown(audio_raw, {
@@ -366,6 +407,21 @@ def _parse_config(raw: dict[str, Any], root: Path) -> OriensConfig:
         "tts_max_segment_chars", "tts_price_per_10k_chars_cny", "pricing_checked_on",
         "workspace_id_env",
     }, "voice")
+    _reject_unknown(realtime_raw, {
+        "enabled", "semantic_vad_enabled", "vad_threshold", "vad_silence_duration_ms",
+        "debug_save_audio", "provider", "model_id",
+        "endpoint", "voice", "input_format", "input_sample_rate", "output_format",
+        "output_sample_rate", "connect_timeout_seconds", "event_timeout_seconds",
+        "tool_timeout_seconds", "max_retries", "reconnect_delay_seconds",
+        "proactive_reconnect_minutes", "session_max_minutes", "context_max_turns",
+        "context_audio_seconds", "summary_max_chars", "max_tool_result_chars",
+        "soft_budget_cny", "hard_budget_cny",
+        "text_image_input_price_per_million_cny", "audio_input_price_per_million_cny",
+        "text_output_price_per_million_cny", "audio_output_price_per_million_cny",
+        "estimated_input_audio_tokens_per_second",
+        "estimated_output_audio_tokens_per_second", "estimated_chars_per_text_token",
+        "pricing_checked_on",
+    }, "realtime")
     _reject_unknown(rag_raw, {
         "source_path", "chunks_path", "manifest_path", "index_path", "eval_path",
         "game_version", "vector_enabled", "vector_model_id", "vector_model_path",
@@ -414,6 +470,68 @@ def _parse_config(raw: dict[str, Any], root: Path) -> OriensConfig:
         tts_price_per_10k_chars_cny=_nonnegative_float(voice_raw, "tts_price_per_10k_chars_cny"),
         pricing_checked_on=_string(voice_raw, "pricing_checked_on"),
         workspace_id_env=_optional_string(voice_raw, "workspace_id_env", "DASHSCOPE_WORKSPACE_ID"),
+    )
+    realtime = RealtimeSettings(
+        enabled=_optional_boolean(realtime_raw, "enabled", False),
+        semantic_vad_enabled=_optional_boolean(
+            realtime_raw, "semantic_vad_enabled", False
+        ),
+        vad_threshold=_optional_range_float(
+            realtime_raw, "vad_threshold", 0.5, 0.0, 1.0
+        ),
+        vad_silence_duration_ms=_optional_range_int(
+            realtime_raw, "vad_silence_duration_ms", 800, 200, 6000
+        ),
+        debug_save_audio=_optional_boolean(realtime_raw, "debug_save_audio", False),
+        provider=_string(realtime_raw, "provider"),
+        model_id=_string(realtime_raw, "model_id"),
+        endpoint=_string(realtime_raw, "endpoint"),
+        voice=_string(realtime_raw, "voice"),
+        input_format=_optional_choice(realtime_raw, "input_format", "pcm", {"pcm"}),
+        input_sample_rate=_optional_choice_int(
+            realtime_raw, "input_sample_rate", 16000, {8000, 16000, 24000, 48000}
+        ),
+        output_format=_optional_choice(realtime_raw, "output_format", "pcm", {"pcm"}),
+        output_sample_rate=_optional_choice_int(
+            realtime_raw, "output_sample_rate", 24000, {8000, 16000, 24000, 48000}
+        ),
+        connect_timeout_seconds=_positive_float(realtime_raw, "connect_timeout_seconds"),
+        event_timeout_seconds=_positive_float(realtime_raw, "event_timeout_seconds"),
+        tool_timeout_seconds=_positive_float(realtime_raw, "tool_timeout_seconds"),
+        max_retries=_nonnegative_int(realtime_raw, "max_retries"),
+        reconnect_delay_seconds=_positive_float(realtime_raw, "reconnect_delay_seconds"),
+        proactive_reconnect_minutes=_positive_float(
+            realtime_raw, "proactive_reconnect_minutes"
+        ),
+        session_max_minutes=_positive_float(realtime_raw, "session_max_minutes"),
+        context_max_turns=_positive_int(realtime_raw, "context_max_turns"),
+        context_audio_seconds=_positive_float(realtime_raw, "context_audio_seconds"),
+        summary_max_chars=_positive_int(realtime_raw, "summary_max_chars"),
+        max_tool_result_chars=_positive_int(realtime_raw, "max_tool_result_chars"),
+        soft_budget_cny=_positive_float(realtime_raw, "soft_budget_cny"),
+        hard_budget_cny=_positive_float(realtime_raw, "hard_budget_cny"),
+        text_image_input_price_per_million_cny=_nonnegative_float(
+            realtime_raw, "text_image_input_price_per_million_cny"
+        ),
+        audio_input_price_per_million_cny=_nonnegative_float(
+            realtime_raw, "audio_input_price_per_million_cny"
+        ),
+        text_output_price_per_million_cny=_nonnegative_float(
+            realtime_raw, "text_output_price_per_million_cny"
+        ),
+        audio_output_price_per_million_cny=_nonnegative_float(
+            realtime_raw, "audio_output_price_per_million_cny"
+        ),
+        estimated_input_audio_tokens_per_second=_positive_float(
+            realtime_raw, "estimated_input_audio_tokens_per_second"
+        ),
+        estimated_output_audio_tokens_per_second=_positive_float(
+            realtime_raw, "estimated_output_audio_tokens_per_second"
+        ),
+        estimated_chars_per_text_token=_positive_float(
+            realtime_raw, "estimated_chars_per_text_token"
+        ),
+        pricing_checked_on=_string(realtime_raw, "pricing_checked_on"),
     )
     rag = RagSettings(
         source_path=(root / _string(rag_raw, "source_path")).resolve(),
@@ -497,8 +615,18 @@ def _parse_config(raw: dict[str, Any], root: Path) -> OriensConfig:
         raise ConfigError("阶段 3 本地播放器仅支持 TTS 输出 PCM；请将 voice.tts_format 设为 pcm")
     if voice.tts_sample_rate != audio.playback_sample_rate:
         raise ConfigError("voice.tts_sample_rate 必须与 audio.playback_sample_rate 一致")
+    if realtime.provider not in providers:
+        raise ConfigError("realtime.provider 引用了不存在的提供商")
+    if realtime.input_sample_rate != audio.input_sample_rate:
+        raise ConfigError("realtime.input_sample_rate 必须与 audio.input_sample_rate 一致")
+    if realtime.output_sample_rate != audio.playback_sample_rate:
+        raise ConfigError("realtime.output_sample_rate 必须与 audio.playback_sample_rate 一致")
+    if realtime.proactive_reconnect_minutes >= realtime.session_max_minutes:
+        raise ConfigError("Realtime 主动重连阈值必须早于会话最长时限")
+    if realtime.soft_budget_cny >= realtime.hard_budget_cny:
+        raise ConfigError("Realtime 软预算必须小于硬预算")
     return OriensConfig(
-        root, app, providers, roles, budget, memory, vision, rag, audio, voice
+        root, app, providers, roles, budget, memory, vision, rag, audio, voice, realtime
     )
 
 
@@ -514,6 +642,7 @@ _USER_CONFIG_ALLOWED: dict[str, frozenset[str]] = {
         "playback_sample_rate", "playback_channels", "playback_queue_max_chunks",
     }),
     "voice": frozenset({"enabled", "push_to_talk_key", "tts_voice", "tts_rate", "tts_volume"}),
+    "realtime": frozenset({"enabled", "semantic_vad_enabled", "debug_save_audio"}),
 }
 
 
