@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 import time
@@ -8,13 +9,27 @@ import unittest
 from oriens.audio import AudioChunk, AudioDeviceUnavailable, AudioFormat, MemoryMicrophone, QueuedAudioPlayer
 from oriens.budget import BudgetTracker
 from sidecar.tests.test_support import load_test_config as load_config
-from oriens.modeling import ModelRouter
+from oriens.modeling import AdapterResponse, ModelRouter, ModelUsage
 from oriens.query import QueryEngine
 from oriens.rag import RagService
 from oriens.rag_pipeline import build_corpus, build_keyword_index
 from oriens.state import GameState
 from oriens.voice import MockRealtimeASR, MockStreamingTTS, TerminologyCorrector, VoiceError, VoiceState
 from oriens.voice_service import VoiceCallbacks, VoiceService
+
+
+class ForgedCitationAdapter:
+    def complete(self, model, model_request, cancel):
+        return AdapterResponse(
+            json.dumps({
+                "advice": "这条在线回答带有错误引用。",
+                "reason": "模拟模型错误。",
+                "confidence": 0.9,
+                "sources": ["forged"],
+                "state_seq": model_request.metadata["state_seq"],
+            }, ensure_ascii=False),
+            ModelUsage(20, 10),
+        )
 
 
 class VoiceServiceTests(unittest.TestCase):
@@ -31,7 +46,7 @@ class VoiceServiceTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.temp.cleanup()
 
-    def _service(self, asr=None):
+    def _service(self, asr=None, router=None):
         state = GameState(run_id="VOICE:0", active=True, last_seq=1, context={"room_index": 4, "room_spawn_seed": 9})
         microphone = MemoryMicrophone()
         played = []
@@ -39,7 +54,8 @@ class VoiceServiceTests(unittest.TestCase):
         budget = BudgetTracker(self.config.budget.run_limit_cny)
         budget.set_run("VOICE:0")
         query = QueryEngine(
-            RagService(self.index), ModelRouter(self.config, online=False, api_key=None),
+            RagService(self.index),
+            router or ModelRouter(self.config, online=False, api_key=None),
             budget, game_version=self.config.rag.game_version,
         )
         events = {"states": [], "transcripts": [], "questions": [], "answers": [], "errors": [], "metrics": []}
@@ -128,6 +144,28 @@ class VoiceServiceTests(unittest.TestCase):
         self.assertTrue(events["answers"])
         self.assertIn("硫磺火", events["answers"][0].answer)
         self.assertIn("语音播报失败，文字回答仍可查看。", events["errors"])
+        service.close()
+
+    def test_invalid_online_citation_falls_back_and_still_speaks(self) -> None:
+        router = ModelRouter(
+            self.config,
+            online=True,
+            api_key="test-only",
+            adapters={"advice": ForgedCitationAdapter()},
+        )
+        service, _microphone, _state, events, played = self._service(router=router)
+
+        service.ask_text("硫磺火有什么效果", speak=True)
+        deadline = time.monotonic() + 2
+        while not events["metrics"] and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        self.assertTrue(events["answers"])
+        self.assertTrue(events["answers"][0].simulated)
+        self.assertIn("格式或来源校验", events["answers"][0].delivery_note or "")
+        self.assertTrue(played)
+        self.assertEqual(events["errors"], [])
+        self.assertIn(VoiceState.SPEAKING, events["states"])
         service.close()
 
     def test_unexpected_tts_worker_error_is_safely_reported(self) -> None:

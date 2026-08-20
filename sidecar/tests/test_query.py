@@ -11,7 +11,7 @@ from sidecar.tests.test_support import load_test_config as load_config
 from oriens.application import MemoryAwareQueryEngine
 from oriens.memory import MemoryCandidate, SQLiteMemoryStore
 from oriens.modeling import AdapterResponse, ModelRouter, ModelUsage
-from oriens.query import QueryEngine, QueryError, QueryValidationError
+from oriens.query import QueryEngine, QueryError
 from oriens.rag import RagService
 from oriens.rag_pipeline import build_corpus, build_keyword_index
 from oriens.state import GameState
@@ -95,7 +95,7 @@ class QueryTests(unittest.TestCase):
         self.assertTrue(token.is_current(state, "request-1"))
         self.assertFalse(token.is_current(state, "old-request"))
 
-    def test_forged_citation_is_rejected(self) -> None:
+    def test_forged_citation_is_rejected_to_local_summary(self) -> None:
         content = json.dumps({
             "advice": "回答", "reason": "说明", "confidence": 0.8,
             "sources": ["forged"], "state_seq": 8,
@@ -105,8 +105,15 @@ class QueryTests(unittest.TestCase):
             adapters={"advice": StaticAdapter(content)},
         )
         state = GameState(run_id="QUERY:0", active=True, last_seq=8, context={"room_index": 4})
-        with self.assertRaises(QueryValidationError):
-            self._engine(router).ask("硫磺火", state, "request-2")
+
+        response, _token = self._engine(router).ask("硫磺火", state, "request-2")
+
+        self.assertTrue(response.simulated)
+        self.assertNotIn("forged", {source.id for source in response.sources})
+        self.assertTrue({source.id for source in response.sources} <= {
+            hit.chunk.source.id for hit in response.rag_hits
+        })
+        self.assertIn("格式或来源校验", response.delivery_note or "")
 
     def test_general_question_without_active_game_allows_source_free_answer(self) -> None:
         content = json.dumps({

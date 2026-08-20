@@ -199,16 +199,15 @@ class QueryEngine:
             except ModelError:
                 routed = self.router.complete_offline(self.MODEL_ROLE, request, cancel_event)
                 note = "网络模型不可用，已使用本地证据摘要。"
-        draft = _validate_query_json(
-            routed.content,
-            expected_state_seq=state.last_seq,
-            allowed_sources={item.id for item in sources},
-        )
-        if not draft[2] and note is None:
-            note = "本次为一般问答或本地游戏资料不足，未引用游戏资料来源。"
+        allowed_source_ids = {item.id for item in sources}
         try:
+            draft = _validate_query_json(
+                routed.content,
+                expected_state_seq=state.last_seq,
+                allowed_sources=allowed_source_ids,
+            )
             _validate_state_claims(draft[0], resolved_players)
-        except StateClaimValidationError:
+        except QueryValidationError as exc:
             if routed.simulated:
                 raise
             billed_route = routed
@@ -216,9 +215,16 @@ class QueryEngine:
             draft = _validate_query_json(
                 routed.content,
                 expected_state_seq=state.last_seq,
-                allowed_sources={item.id for item in sources},
+                allowed_sources=allowed_source_ids,
             )
-            note = "网络模型回答未通过本地游戏状态校验，已使用本地证据摘要。"
+            _validate_state_claims(draft[0], resolved_players)
+            note = (
+                "网络模型回答未通过本地游戏状态校验，已使用本地证据摘要。"
+                if isinstance(exc, StateClaimValidationError)
+                else "网络模型回答未通过本地格式或来源校验，已使用本地证据摘要。"
+            )
+        if not draft[2] and note is None:
+            note = "本次为一般问答或本地游戏资料不足，未引用游戏资料来源。"
         source_map = {item.id: item for item in sources}
         cost_route = billed_route or routed
         cost = self.budget.record(
