@@ -108,6 +108,30 @@ class QueryTests(unittest.TestCase):
         with self.assertRaises(QueryValidationError):
             self._engine(router).ask("硫磺火", state, "request-2")
 
+    def test_general_question_without_active_game_allows_source_free_answer(self) -> None:
+        content = json.dumps({
+            "advice": "你好！我是 Oriens，很高兴见到你。有什么想聊的吗？",
+            "reason": "这是一般寒暄，不需要引用游戏资料。",
+            "confidence": 0.98,
+            "sources": [],
+            "state_seq": 0,
+        }, ensure_ascii=False)
+        adapter = StaticAdapter(content)
+        router = ModelRouter(
+            self.config, online=True, api_key="test-only",
+            adapters={"advice": adapter},
+        )
+        state = GameState()
+
+        response, token = self._engine(router).ask("你好？", state, "general-request")
+
+        self.assertEqual(response.answer, "你好！我是 Oriens，很高兴见到你。有什么想聊的吗？")
+        self.assertEqual(response.sources, ())
+        self.assertFalse(response.rag_hits)
+        self.assertTrue(token.is_current(state, "general-request"))
+        self.assertIn("问题与游戏无关", adapter.requests[0].system_prompt)
+        self.assertIn("未引用游戏资料来源", response.delivery_note or "")
+
     def test_room_change_expires_question_token(self) -> None:
         state = GameState(run_id="QUERY:0", active=True, last_seq=8, context={"room_index": 4, "room_spawn_seed": 9})
         _response, token = self._engine().ask("硫磺火", state, "request-3")

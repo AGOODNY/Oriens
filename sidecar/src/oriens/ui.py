@@ -848,7 +848,11 @@ class OverlayWindow(QMainWindow):
             return
         self._stop_thinking()
         self.advice_label.setText(response.answer)
-        note = response.delivery_note or "回答通过本地证据和结构校验。"
+        note = response.delivery_note or (
+            "回答通过本地证据和结构校验。"
+            if response.sources
+            else "本次为一般问答，未引用本地游戏资料。"
+        )
         self.reason_label.setText(note)
         self.source_label.setText(_format_source_links(response.sources))
         self.metrics_label.setText(
@@ -860,7 +864,9 @@ class OverlayWindow(QMainWindow):
             f"本次 ¥{response.cost.estimated_cost_cny:.6f} · 本局 ¥{response.cost.run_total_cny:.6f} · "
             f"输入 {response.cost.input_tokens} · 输出 {response.cost.output_tokens} · {response.cost.model}"
         )
-        if response.retrieval_degraded:
+        if not response.sources:
+            self.voice_hint_label.setText("本次为一般问答，未引用本地游戏资料。")
+        elif response.retrieval_degraded:
             self.voice_hint_label.setText("已发生离线降级：" + (response.retrieval_degradation_reason or "关键词检索"))
         else:
             self.voice_hint_label.setText("本次问答使用本地混合检索，未联网搜索。")
@@ -1132,6 +1138,8 @@ def _half_hearts(value: Any) -> str:
 
 
 def _format_source_links(sources: Any) -> str:
+    if not sources:
+        return '<span style="color:#cbb98f;">来源：一般问答（未引用本地游戏资料）</span>'
     links = " · ".join(
         '<a style="color:#d2ad61;text-decoration:underline;" '
         f'href="{escape(source.url, quote=True)}">{escape(source.title)}</a>'

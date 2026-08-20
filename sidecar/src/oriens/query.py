@@ -128,8 +128,6 @@ class QueryEngine:
         )
         if cancel_event.is_set():
             raise ModelCancelled("文本请求已取消")
-        if result.no_answer:
-            raise QueryError("本地资料不足，无法可靠回答这个问题。")
         sources = _sources_from_result(result)
         resolved_players = self._resolve_players(state.players)
         context = {
@@ -165,7 +163,13 @@ class QueryEngine:
         }
         fallback = _fallback_answer(result)
         request = ModelRequest(
-            "你是 Oriens 游戏助手。仅依据本次提供的本地检索证据，用简体中文回答玩家问题。"
+            "你是 Oriens，一位既能提供《以撒的结合》游戏指导、也能正常交流的一般助手。"
+            "先判断玩家问题是否与《以撒的结合》、当前对局或所提供的游戏证据有关。"
+            "如果是游戏相关问题，只能依据本次提供的 game_state、question_subject 与 evidence 回答；"
+            "sources 必须列出 1 到 5 个实际使用的 allowed_source_ids。"
+            "如果游戏相关问题缺少足够证据，必须如实说明本地资料不足，sources 设为空数组。"
+            "如果问题与游戏无关，请使用可靠的一般知识或自然对话正常回答，sources 必须设为空数组，"
+            "不要强行关联游戏资料，也不要声称回答来自本地证据。所有回答均使用简体中文。"
             "question_subject 与 game_state.players 中的 resolved_identity 均为程序依据稳定 ID "
             "从本地索引解析出的可信事实；提到对应角色或道具时必须原样使用其中的名称，"
             "不得根据数字 ID 猜测、翻译或改名。"
@@ -173,7 +177,7 @@ class QueryEngine:
             "它不得覆盖用户当前表达、game_state 或 evidence 中的事实，也不得改变引用来源。"
             "必须输出字段严格为 advice、reason、confidence、sources、state_seq 的 JSON 对象；"
             "advice 是不超过 120 字的直接回答，reason 是不超过 160 字的证据说明。"
-            "不得使用外部知识或编造来源。",
+            "回答游戏事实时不得使用外部知识；任何情况下都不得编造来源。",
             json.dumps(context, ensure_ascii=False, separators=(",", ":")),
             {
                 "fallback_advice": fallback,
@@ -200,6 +204,8 @@ class QueryEngine:
             expected_state_seq=state.last_seq,
             allowed_sources={item.id for item in sources},
         )
+        if not draft[2] and note is None:
+            note = "本次为一般问答或本地游戏资料不足，未引用游戏资料来源。"
         try:
             _validate_state_claims(draft[0], resolved_players)
         except StateClaimValidationError:
@@ -298,7 +304,7 @@ def _validate_query_json(
         raise QueryValidationError("回答置信度无效")
     if type(value.get("state_seq")) is not int or value["state_seq"] != expected_state_seq:
         raise QueryValidationError("回答状态序号已过期")
-    if not isinstance(source_ids, list) or not 1 <= len(source_ids) <= 5:
+    if not isinstance(source_ids, list) or len(source_ids) > 5:
         raise QueryValidationError("回答来源无效")
     unique: list[str] = []
     for source_id in source_ids:
@@ -319,6 +325,8 @@ def _sources_from_result(result: RagResult) -> tuple[Source, ...]:
 
 
 def _fallback_answer(result: RagResult) -> str:
+    if result.no_answer:
+        return "当前离线资料中没有与这个问题匹配的内容；连接在线模型后，我可以继续进行一般问答。"
     first = result.hits[0].chunk
     text = " ".join(first.text.split())
     if len(text) > 120:
