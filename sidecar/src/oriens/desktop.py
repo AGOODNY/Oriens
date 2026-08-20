@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QAbstractItemView,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHeaderView,
     QHBoxLayout,
@@ -22,7 +24,10 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QLineEdit,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
+    QStackedWidget,
     QStyle,
     QSystemTrayIcon,
     QTableWidget,
@@ -35,6 +40,13 @@ from .application import ListeningState, OriensApplication
 from .config import ConfigError, ConfigService
 from .knowledge_pack import KnowledgePackError, KnowledgePackManager
 from .memory import MEMORY_KINDS
+from .theme import (
+    BookTitleBar,
+    FramelessBookWindow,
+    StatusCard,
+    application_icon,
+    apply_application_theme,
+)
 from .ui import OverlayWindow
 
 
@@ -57,11 +69,22 @@ _MEMORY_STATUS_LABELS = {
 class SettingsDialog(QDialog):
     """仅保存阶段 3.5 已允许的非敏感设置。"""
 
-    def __init__(self, application: OriensApplication, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        application: OriensApplication,
+        parent: QWidget | None = None,
+        *,
+        embedded: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.application = application
+        self.embedded = embedded
+        if embedded:
+            self.setWindowFlags(Qt.WindowType.Widget)
+            self.setObjectName("embeddedPanel")
         self.setWindowTitle("Oriens 设置")
-        self.setMinimumWidth(440)
+        if not embedded:
+            self.setMinimumWidth(440)
         layout = QVBoxLayout(self)
         form = QFormLayout()
         self.voice_enabled = QCheckBox("启用语音")
@@ -146,6 +169,10 @@ class SettingsDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
+        if embedded:
+            cancel = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+            if cancel is not None:
+                cancel.hide()
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -181,17 +208,31 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "设置未保存", "设置文件暂时无法安全保存，请稍后重试。")
             return
         QMessageBox.information(self, "设置已保存", "设置将在下次启动 Oriens 时生效。")
-        self.accept()
+        if not self.embedded:
+            self.accept()
 
 
 class MemoryManagementDialog(QDialog):
     """通过应用命令管理本机长期记忆，不接触 SQLite 或绝对路径。"""
 
-    def __init__(self, application: OriensApplication, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        application: OriensApplication,
+        parent: QWidget | None = None,
+        *,
+        embedded: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.application = application
+        self.embedded = embedded
+        if embedded:
+            self.setWindowFlags(Qt.WindowType.Widget)
+            self.setObjectName("embeddedPanel")
         self.setWindowTitle("Oriens 长期记忆管理")
-        self.resize(860, 560)
+        if not embedded:
+            self.resize(860, 560)
+        else:
+            self.setMinimumHeight(430)
         layout = QVBoxLayout(self)
         self.service_status = QLabel()
         self.service_status.setWordWrap(True)
@@ -228,6 +269,7 @@ class MemoryManagementDialog(QDialog):
         self.delete_button = QPushButton("删除选中项")
         self.clear_button = QPushButton("清空全部长期记忆")
         self.close_button = QPushButton("关闭")
+        self.close_button.setVisible(not embedded)
         for button in (
             self.add_button, self.update_button, self.toggle_button,
             self.delete_button, self.clear_button, self.close_button,
@@ -393,50 +435,121 @@ class MemoryManagementDialog(QDialog):
         QMessageBox.warning(self, "长期记忆操作未完成", message)
 
 
-class ControlCenterWindow(QMainWindow):
+class ControlCenterWindow(FramelessBookWindow):
     def __init__(self, controller: "DesktopController") -> None:
         super().__init__()
         self.controller = controller
         self._allow_close = False
         self.setWindowTitle("Oriens 控制中心")
-        self.resize(620, 620)
-        root = QWidget()
-        layout = QVBoxLayout(root)
-        title = QLabel("Oriens 桌面伴侣")
-        title.setStyleSheet("font-size: 24px; font-weight: 600;")
-        layout.addWidget(title)
-        self.status_labels: dict[str, QLabel] = {}
-        status_group = QGroupBox("运行状态")
-        status_form = QFormLayout(status_group)
-        for key, caption in (
-            ("overall", "整体状态"),
-            ("listening", "监听状态"),
-            ("mode", "运行模式"),
-            ("config", "配置来源"),
-            ("knowledge", "知识包"),
-            ("log", "游戏日志"),
-            ("rag", "RAG"),
-            ("voice", "语音"),
-            ("realtime", "实时语音实验"),
-            ("cost", "当前会话费用"),
-            ("memory", "长期记忆"),
-            ("vision", "视觉补充"),
-        ):
-            label = QLabel("—")
-            label.setWordWrap(True)
-            self.status_labels[key] = label
-            status_form.addRow(caption, label)
-        layout.addWidget(status_group)
+        self.setMinimumSize(960, 640)
+        self.resize(1100, 720)
 
+        shell = QFrame()
+        shell.setObjectName("bookShell")
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+        shell_layout.addWidget(
+            BookTitleBar(
+                self,
+                application_icon(controller.application.paths),
+                "桌面伴侣",
+            )
+        )
+
+        body = QFrame()
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+        shell_layout.addWidget(body, 1)
+
+        spine = QFrame()
+        spine.setObjectName("bookSpine")
+        spine.setFixedWidth(210)
+        spine_layout = QVBoxLayout(spine)
+        spine_layout.setContentsMargins(0, 28, 0, 20)
+        spine_layout.setSpacing(4)
+        ornament = QLabel("◇  ·  •  ·  ◇")
+        ornament.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ornament.setStyleSheet("color:#c7a052; padding:8px;")
+        spine_layout.addWidget(ornament)
+        self.chapter_group = QButtonGroup(self)
+        self.chapter_group.setExclusive(True)
+        self.chapter_buttons: list[QPushButton] = []
+        for index, caption in enumerate(("总览", "对局", "语音", "知识", "记忆", "设置")):
+            button = QPushButton(caption)
+            button.setObjectName("chapterButton")
+            button.setCheckable(True)
+            button.clicked.connect(lambda _checked=False, page=index: self._set_chapter(page))
+            self.chapter_group.addButton(button, index)
+            self.chapter_buttons.append(button)
+            spine_layout.addWidget(button)
+        spine_layout.addStretch(1)
+        spine_note = QLabel("•  微光守望中\n\n关闭窗口将缩到系统托盘")
+        spine_note.setObjectName("spineNote")
+        spine_note.setWordWrap(True)
+        spine_layout.addWidget(spine_note)
+        body_layout.addWidget(spine)
+
+        self.chapter_stack = QStackedWidget()
+        self.chapter_stack.setObjectName("chapterStack")
+        body_layout.addWidget(self.chapter_stack, 1)
+
+        self.status_labels: dict[str, QLabel] = {}
+
+        overview, overview_layout = self._new_page("总览", "你的游戏向导正在守望本局")
+        self.overall_banner = QLabel("一切就绪")
+        self.overall_banner.setObjectName("pageStatus")
+        overview_layout.addWidget(self.overall_banner)
+        card_row = QHBoxLayout()
+        for key, caption, glyph in (
+            ("overall", "核心运行", "•"),
+            ("listening", "监听状态", "◉"),
+            ("cost", "费用与预算", "¥"),
+        ):
+            card = StatusCard(caption, glyph)
+            self.status_labels[key] = card.value
+            card_row.addWidget(card)
+        overview_layout.addLayout(card_row)
+        overview_layout.addWidget(self._section_title("快速操作"))
+        quick_row = QHBoxLayout()
+        for caption, callback in (
+            ("暂停监听", controller.pause_listening),
+            ("显示悬浮窗", controller.show_overlay),
+            ("识别当前画面", controller.identify_current_view),
+            ("打开设置", lambda: self._set_chapter(5)),
+        ):
+            button = QPushButton(caption)
+            button.setObjectName("primaryAction" if caption == "显示悬浮窗" else "")
+            button.clicked.connect(callback)
+            quick_row.addWidget(button)
+        overview_layout.addLayout(quick_row)
+        summary_panel = QFrame()
+        summary_panel.setObjectName("manuscriptPanel")
+        summary_form = QFormLayout(summary_panel)
+        self.status_labels["mode"] = self._status_value()
+        summary_form.addRow("运行模式", self.status_labels["mode"])
+        overview_layout.addWidget(summary_panel)
+        privacy_note = QLabel("•  只捕获已识别的游戏窗口；默认不保存截图。")
+        privacy_note.setObjectName("pageSubtitle")
+        privacy_note.setWordWrap(True)
+        overview_layout.addWidget(privacy_note)
+        overview_layout.addStretch(1)
+
+        game_page, game_layout = self._new_page("对局", "管理监听、悬浮窗与按需视觉补充")
+        runtime_group = QGroupBox("本局运行")
+        runtime_form = QFormLayout(runtime_group)
+        self.status_labels["log"] = self._status_value()
+        self.status_labels["vision"] = self._status_value()
+        runtime_form.addRow("游戏日志", self.status_labels["log"])
+        runtime_form.addRow("视觉补充", self.status_labels["vision"])
+        game_layout.addWidget(runtime_group)
         self.start_button = QPushButton("启动监听")
         self.pause_button = QPushButton("暂停监听")
         self.show_overlay_button = QPushButton("显示悬浮窗")
         self.hide_overlay_button = QPushButton("隐藏悬浮窗")
-        self.settings_button = QPushButton("打开设置")
-        self.memory_button = QPushButton("管理长期记忆")
         self.vision_button = QPushButton("识别当前游戏画面")
         self.cancel_vision_button = QPushButton("取消视觉识别")
-        self.exit_button = QPushButton("完全退出 Oriens")
         session_row = QHBoxLayout()
         for button in (
             self.start_button,
@@ -445,15 +558,7 @@ class ControlCenterWindow(QMainWindow):
             self.hide_overlay_button,
         ):
             session_row.addWidget(button)
-        layout.addLayout(session_row)
-        management_row = QHBoxLayout()
-        for button in (
-            self.settings_button,
-            self.memory_button,
-            self.exit_button,
-        ):
-            management_row.addWidget(button)
-        layout.addLayout(management_row)
+        game_layout.addLayout(session_row)
         vision_group = QGroupBox("按需视觉补充")
         vision_row = QHBoxLayout(vision_group)
         vision_note = QLabel("只捕获已识别的游戏窗口；默认不保存截图。")
@@ -464,7 +569,17 @@ class ControlCenterWindow(QMainWindow):
             self.cancel_vision_button,
         ):
             vision_row.addWidget(button)
-        layout.addWidget(vision_group)
+        game_layout.addWidget(vision_group)
+        game_layout.addStretch(1)
+
+        voice_page, voice_layout = self._new_page("语音", "链式语音为默认模式，实时实验可按需连接")
+        voice_status_group = QGroupBox("语音服务")
+        voice_status_form = QFormLayout(voice_status_group)
+        self.status_labels["voice"] = self._status_value()
+        self.status_labels["realtime"] = self._status_value()
+        voice_status_form.addRow("链式语音", self.status_labels["voice"])
+        voice_status_form.addRow("实时语音实验", self.status_labels["realtime"])
+        voice_layout.addWidget(voice_status_group)
         realtime_group = QGroupBox("实时语音实验")
         realtime_layout = QVBoxLayout(realtime_group)
         realtime_note = QLabel(
@@ -484,11 +599,74 @@ class ControlCenterWindow(QMainWindow):
         ):
             realtime_row.addWidget(button)
         realtime_layout.addLayout(realtime_row)
-        layout.addWidget(realtime_group)
+        voice_layout.addWidget(realtime_group)
+        voice_layout.addStretch(1)
+
+        knowledge_page, knowledge_layout = self._new_page("知识", "本地知识包与检索服务状态")
+        knowledge_group = QGroupBox("知识与检索")
+        knowledge_form = QFormLayout(knowledge_group)
+        for key, caption in (("knowledge", "当前知识包"), ("rag", "RAG"), ("config", "配置来源")):
+            self.status_labels[key] = self._status_value()
+            knowledge_form.addRow(caption, self.status_labels[key])
+        knowledge_layout.addWidget(knowledge_group)
+        knowledge_note = QLabel("知识与检索均优先使用本地资料；离线模式下仍可提供已覆盖内容的建议。")
+        knowledge_note.setObjectName("pageSubtitle")
+        knowledge_note.setWordWrap(True)
+        knowledge_layout.addWidget(knowledge_note)
+        knowledge_layout.addStretch(1)
+
+        memory_page, memory_layout = self._new_page("记忆", "长期记忆只保存在本机")
+        memory_group = QGroupBox("记忆服务")
+        memory_form = QFormLayout(memory_group)
+        self.status_labels["memory"] = self._status_value()
+        memory_form.addRow("当前状态", self.status_labels["memory"])
+        memory_layout.addWidget(memory_group)
+        self.memory_button = QPushButton("在独立窗口打开记忆管理")
+        self.memory_button.setObjectName("primaryAction")
+        self.memory_panel = MemoryManagementDialog(
+            controller.application,
+            memory_page,
+            embedded=True,
+        )
+        memory_layout.addWidget(self.memory_panel)
+        memory_layout.addWidget(self.memory_button)
+        memory_note = QLabel("关闭总开关不会自动删除已有数据；删除单条或清空全部记忆仍会再次确认。")
+        memory_note.setObjectName("pageSubtitle")
+        memory_note.setWordWrap(True)
+        memory_layout.addWidget(memory_note)
+        memory_layout.addStretch(1)
+
+        settings_page, settings_layout = self._new_page("设置", "调整语音、预算、记忆、视觉与实验功能")
+        settings_group = QGroupBox("应用设置")
+        settings_group_layout = QVBoxLayout(settings_group)
+        settings_copy = QLabel(
+            "设置保存后在下次启动 Oriens 时生效。API Key、业务空间 ID 和完整端点不会显示或写入这里。"
+        )
+        settings_copy.setWordWrap(True)
+        settings_group_layout.addWidget(settings_copy)
+        self.settings_button = QPushButton("在独立窗口打开设置")
+        self.settings_button.setObjectName("primaryAction")
+        settings_group_layout.addWidget(self.settings_button)
+        settings_layout.addWidget(settings_group)
+        self.settings_panel = SettingsDialog(
+            controller.application,
+            settings_page,
+            embedded=True,
+        )
+        settings_layout.addWidget(self.settings_panel)
+        self.exit_button = QPushButton("完全退出 Oriens")
+        self.exit_button.setObjectName("dangerAction")
+        settings_layout.addWidget(self.exit_button)
         self.close_hint = QLabel("关闭此窗口会缩到系统托盘；只有“完全退出”才会停止后台核心。")
         self.close_hint.setWordWrap(True)
-        layout.addWidget(self.close_hint)
-        self.setCentralWidget(root)
+        self.close_hint.setObjectName("pageSubtitle")
+        settings_layout.addWidget(self.close_hint)
+        settings_layout.addStretch(1)
+
+        self.setCentralWidget(shell)
+        self.enable_resize_tracking(shell)
+        self.chapter_buttons[0].setChecked(True)
+        self._set_chapter(0)
 
         self.start_button.clicked.connect(controller.resume_listening)
         self.pause_button.clicked.connect(controller.pause_listening)
@@ -503,6 +681,47 @@ class ControlCenterWindow(QMainWindow):
         self.realtime_cancel_button.clicked.connect(controller.cancel_realtime)
         self.exit_button.clicked.connect(controller.quit)
 
+    def _new_page(self, title: str, subtitle: str) -> tuple[QFrame, QVBoxLayout]:
+        scroll = QScrollArea()
+        scroll.setObjectName("chapterScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        page = QFrame()
+        page.setObjectName("parchmentPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(38, 28, 38, 30)
+        layout.setSpacing(14)
+        title_label = QLabel(title)
+        title_label.setObjectName("pageTitle")
+        layout.addWidget(title_label)
+        subtitle_label = QLabel(subtitle)
+        subtitle_label.setObjectName("pageSubtitle")
+        subtitle_label.setWordWrap(True)
+        layout.addWidget(subtitle_label)
+        scroll.setWidget(page)
+        self.chapter_stack.addWidget(scroll)
+        return page, layout
+
+    @staticmethod
+    def _section_title(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("sectionTitle")
+        return label
+
+    @staticmethod
+    def _status_value() -> QLabel:
+        label = QLabel("—")
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        return label
+
+    @Slot(int)
+    def _set_chapter(self, index: int) -> None:
+        self.chapter_stack.setCurrentIndex(index)
+        if 0 <= index < len(self.chapter_buttons):
+            self.chapter_buttons[index].setChecked(True)
+
     @Slot()
     def open_settings(self) -> None:
         SettingsDialog(self.controller.application, self).exec()
@@ -514,6 +733,9 @@ class ControlCenterWindow(QMainWindow):
     def refresh(self) -> None:
         snapshot = self.controller.application.runtime_snapshot()
         self.status_labels["overall"].setText(snapshot.phase.value)
+        self.overall_banner.setText(
+            "一切就绪" if snapshot.listening is ListeningState.LISTENING else "守望暂歇"
+        )
         self.status_labels["listening"].setText(snapshot.listening.value)
         self.status_labels["mode"].setText("在线模式" if snapshot.online else "离线模式")
         self.status_labels["config"].setText(snapshot.config_source)
@@ -573,6 +795,7 @@ class DesktopController(QObject):
         super().__init__()
         self.application = application
         self.qt_app = qt_app
+        apply_application_theme(self.qt_app, application.paths)
         self.qt_app.setQuitOnLastWindowClosed(False)
         self._exiting = False
         self.overlay = OverlayWindow(application=application, auto_poll=False)
@@ -591,7 +814,9 @@ class DesktopController(QObject):
     def _create_tray(self) -> None:
         if not self.tray_available:
             return
-        icon = self.qt_app.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+        icon = application_icon(self.application.paths)
+        if icon.isNull():
+            icon = self.qt_app.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
         tray = QSystemTrayIcon(icon, self)
         tray.setToolTip("Oriens 桌面伴侣")
         menu = QMenu()

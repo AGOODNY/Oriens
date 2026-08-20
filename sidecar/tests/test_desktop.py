@@ -51,11 +51,21 @@ class DesktopShellTests(unittest.TestCase):
     def test_one_core_is_shared_by_control_center_and_overlay(self) -> None:
         assert QApplication is not None
         from oriens.desktop import DesktopController
+        from oriens.theme import load_bundled_fonts
 
         qt_app = QApplication.instance() or QApplication([])
         with tempfile.TemporaryDirectory() as directory:
             application = self._build(directory)
+            body_font, display_font = load_bundled_fonts(application.paths)
+            self.assertEqual(body_font, "Noto Serif SC")
+            self.assertEqual(display_font, "Cinzel Decorative")
             controller = DesktopController(application, qt_app, tray_available=False)
+            self.assertEqual(controller.control_center.chapter_stack.count(), 6)
+            self.assertEqual(controller.control_center.chapter_stack.currentIndex(), 0)
+            self.assertTrue(controller.control_center.chapter_buttons[0].isChecked())
+            controller.control_center.chapter_buttons[2].click()
+            self.assertEqual(controller.control_center.chapter_stack.currentIndex(), 2)
+            self.assertFalse(controller.control_center.windowIcon().isNull())
             self.assertIs(controller.application, application)
             self.assertIs(controller.overlay.application, application)
             self.assertIs(controller.overlay.store, application.session)

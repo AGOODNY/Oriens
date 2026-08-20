@@ -113,6 +113,12 @@ class AppPaths:
         return self.resources / "config" / "default.toml"
 
     @property
+    def ui_assets_dir(self) -> Path:
+        """随程序分发的界面字体、图标和装饰资源。"""
+
+        return self.resources / "assets" / "ui"
+
+    @property
     def development_data_dir(self) -> Path | None:
         return self.repository / "data" if self.repository is not None else None
 

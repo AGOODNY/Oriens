@@ -18,6 +18,7 @@ class AppPathsTests(unittest.TestCase):
             self.assertEqual(paths.development_data_dir, root.resolve() / "data")
             self.assertEqual(paths.user_config_file, user.resolve() / "config/settings.toml")
             self.assertEqual(paths.memory_dir, user.resolve() / "memory")
+            self.assertEqual(paths.ui_assets_dir, root.resolve() / "assets/ui")
             self.assertEqual(
                 paths.model_dir_for("BAAI/bge-m3"),
                 user.resolve() / "models/BAAI-bge-m3",
@@ -35,6 +36,7 @@ class AppPathsTests(unittest.TestCase):
             self.assertEqual(paths.models_dir, base.resolve() / "Oriens/models")
             self.assertEqual(paths.cache_dir, base.resolve() / "Oriens/cache")
             self.assertEqual(paths.logs_dir, base.resolve() / "Oriens/logs")
+            self.assertEqual(paths.ui_assets_dir, resources.resolve() / "assets/ui")
             self.assertIsNone(paths.repository)
 
 

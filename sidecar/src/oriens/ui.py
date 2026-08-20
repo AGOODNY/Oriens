@@ -33,6 +33,7 @@ from .application import OriensApplication
 from .modeling import ModelCancelled
 from .query import QueryResponse, QueryToken
 from .protocol import GameEvent
+from .theme import OVERLAY_STYLE, application_icon
 from .voice import Transcript, VoiceMetrics, VoiceState
 from .voice_service import VoiceCallbacks, VoiceService
 from .vision import VisionError, VisionResult, VisionToken
@@ -119,7 +120,7 @@ class _ThinkingSpinner(QWidget):
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt API
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor("#9fd7ff"), 3)
+        pen = QPen(QColor("#dcee88"), 3)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
         painter.drawArc(QRectF(4, 4, 16, 16), self._angle * 16, 255 * 16)
@@ -176,8 +177,13 @@ class OverlayWindow(QMainWindow):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumWidth(440)
-        self.resize(500, 860)
+        self.resize(500, 820)
+        icon = application_icon(application.paths)
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         self._build_ui()
+        self._normal_size = self.size()
+        self._set_compact_mode(True)
 
         asr_available = False
         unavailable_reason = None
@@ -243,6 +249,16 @@ class OverlayWindow(QMainWindow):
         shell_layout.addWidget(self.main_scroll)
 
         header = QHBoxLayout()
+        brand_mark = QLabel()
+        brand_mark.setObjectName("brandMark")
+        brand_mark.setFixedSize(34, 34)
+        icon = application_icon(self.application.paths)
+        if not icon.isNull():
+            brand_mark.setPixmap(icon.pixmap(32, 32))
+        else:
+            brand_mark.setText("O")
+            brand_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.addWidget(brand_mark)
         title = QLabel("ORIENS")
         title.setObjectName("title")
         header.addWidget(title)
@@ -261,6 +277,11 @@ class OverlayWindow(QMainWindow):
         close_button.clicked.connect(self.close)
         header.addWidget(close_button)
         layout.addLayout(header)
+
+        self.compact_context_label = QLabel("尚未进入一局游戏  ·  红心 —  ·  硬币 —  ·  钥匙 —  ·  炸弹 —")
+        self.compact_context_label.setObjectName("contextRibbon")
+        self.compact_context_label.setWordWrap(True)
+        layout.addWidget(self.compact_context_label)
 
         self.mode_label = QLabel()
         self.mode_label.setObjectName("hint")
@@ -300,11 +321,11 @@ class OverlayWindow(QMainWindow):
         ptt_row = QHBoxLayout()
         self.ptt_button = QPushButton(f"按住说话（{self.config.voice.push_to_talk_key}）")
         self.ptt_button.setObjectName("primary")
-        self.ptt_button.setMinimumHeight(40)
+        self.ptt_button.setMinimumHeight(44)
         self.ptt_button.pressed.connect(self._voice_press)
         self.ptt_button.released.connect(self._voice_release)
         self.cancel_voice_button = QPushButton("取消")
-        self.cancel_voice_button.setMinimumHeight(40)
+        self.cancel_voice_button.setMinimumHeight(44)
         self.cancel_voice_button.clicked.connect(self._voice_cancel)
         ptt_row.addWidget(self.ptt_button, 1)
         ptt_row.addWidget(self.cancel_voice_button)
@@ -487,6 +508,23 @@ class OverlayWindow(QMainWindow):
         self.event_scroll.setWidget(self.events_label)
         layout.addWidget(self.event_scroll)
 
+        # 完整态保持单列手稿阅读顺序，核心建议始终优先于工具与调试信息。
+        ordered_widgets = (
+            self.advice_frame,
+            self.voice_frame,
+            self.vision_frame,
+            self.item_frame,
+            self.budget_frame,
+            self.rag_caption,
+            self.rag_scroll,
+            self.event_caption,
+            self.event_scroll,
+        )
+        for widget in ordered_widgets:
+            layout.removeWidget(widget)
+        for widget in ordered_widgets:
+            layout.addWidget(widget)
+
         self._compact_hidden_widgets = [
             self.mode_label,
             self.room_card,
@@ -507,9 +545,7 @@ class OverlayWindow(QMainWindow):
             self.voice_metrics_label,
             self.vision_frame,
             self.item_frame,
-            self.advice_caption,
             self.reason_label,
-            self.source_label,
             self.metrics_label,
             self.rag_caption,
             self.rag_scroll,
@@ -518,20 +554,28 @@ class OverlayWindow(QMainWindow):
             self.event_scroll,
         ]
 
-        self.setStyleSheet(_STYLE)
+        self.setStyleSheet(OVERLAY_STYLE)
+        # QSS 的最小高度在应用时会覆盖构造阶段的尺寸；交互控件在主题生效后重新锁定。
+        self.ptt_button.setMinimumHeight(44)
+        self.cancel_voice_button.setMinimumHeight(44)
+        self.question_input.setMinimumHeight(40)
+        self.ask_button.setMinimumHeight(40)
 
     @Slot()
     def _toggle_compact_mode(self) -> None:
-        self._compact_mode = not self._compact_mode
-        if self._compact_mode:
+        self._set_compact_mode(not self._compact_mode)
+
+    def _set_compact_mode(self, compact: bool) -> None:
+        if compact and not self._compact_mode and self.height() > 360:
             self._normal_size = self.size()
+        self._compact_mode = compact
         for widget in self._compact_hidden_widgets:
             widget.setVisible(not self._compact_mode)
         if self.thinking_spinner.is_running():
             self._start_thinking()
-        self.compact_button.setText("□" if self._compact_mode else "—")
+        self.compact_button.setText("↗" if self._compact_mode else "↙")
         self.compact_button.setToolTip(
-            "恢复完整界面" if self._compact_mode else "精简模式：只显示输入框和回答框"
+            "展开完整手稿" if self._compact_mode else "收起为紧凑悬浮窗"
         )
         self.main_scroll.verticalScrollBar().setValue(0)
         if self._compact_mode:
@@ -586,6 +630,7 @@ class OverlayWindow(QMainWindow):
         self.room_label.setText(
             f"{room_name}\n楼层 {context.get('stage', '—')} · 房间 {context.get('room_index', '—')}"
         )
+        compact_resources = "红心 — · 硬币 — · 钥匙 — · 炸弹 —"
         players = self.store.state.players
         if players:
             player = players[sorted(players)[0]]
@@ -597,6 +642,14 @@ class OverlayWindow(QMainWindow):
                 f"硬币 {resources.get('coins', '—')} · 钥匙 {resources.get('keys', '—')} · "
                 f"炸弹 {resources.get('bombs', '—')}"
             )
+            compact_resources = (
+                f"红心 {_half_hearts(health.get('red_hearts'))} · "
+                f"硬币 {resources.get('coins', '—')} · 钥匙 {resources.get('keys', '—')} · "
+                f"炸弹 {resources.get('bombs', '—')}"
+            )
+        self.compact_context_label.setText(
+            f"{room_name} · 第 {context.get('stage', '—')} 层  ·  {compact_resources}"
+        )
         if event.type == "run_ended":
             self.connection_label.setText("本局已结束")
 
@@ -937,9 +990,9 @@ class OverlayWindow(QMainWindow):
         self.thinking_spinner.stop()
         self.thinking_widget.hide()
         self.advice_label.show()
+        self.source_label.show()
         if not self._compact_mode:
             self.reason_label.show()
-            self.source_label.show()
             self.metrics_label.show()
 
     def _update_connection(self) -> None:
@@ -1080,11 +1133,11 @@ def _half_hearts(value: Any) -> str:
 
 def _format_source_links(sources: Any) -> str:
     links = " · ".join(
-        '<a style="color:#b9e5ff;text-decoration:underline;" '
+        '<a style="color:#d2ad61;text-decoration:underline;" '
         f'href="{escape(source.url, quote=True)}">{escape(source.title)}</a>'
         for source in sources
     )
-    return '<span style="color:#c9eaff;">来源：' + links + "</span>"
+    return '<span style="color:#cbb98f;">来源：' + links + "</span>"
 
 
 _STYLE = """
