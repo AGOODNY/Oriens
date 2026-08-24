@@ -1,13 +1,15 @@
-local Oriens = RegisterMod("Oriens Phase 0 Probe", 1)
+local Oriens = RegisterMod("Oriens Bridge", 1)
 local game = Game()
 local json = require("json")
 
 local PREFIX = "[ORIENS_EVENT]"
+local ERROR_PREFIX = "[ORIENS_BRIDGE_ERROR]"
 local SCHEMA_VERSION = 1
-local BRIDGE_VERSION = "0.1.0"
+local BRIDGE_VERSION = "0.2.0"
 local HEARTBEAT_FRAMES = 60
 local SNAPSHOT_FRAMES = 300
 local PLAYER_POLL_FRAMES = 6
+local ROOM_STABLE_FRAMES = 3
 
 local sequence = 0
 local runId = "boot"
@@ -19,9 +21,15 @@ local lastPlayerFingerprints = {}
 local lastInventoryFingerprints = {}
 local lastInventories = {}
 local deathReported = {}
+local pendingRoomEntered = false
+local pendingFloorChanged = false
+local pendingRoomCleared = false
+local pendingSnapshotReason = nil
+local pendingCollectibles = {}
+local disabledCallbacks = {}
 
 local function roomContext()
-    if not activeRun then
+    if not activeRun or game:IsPaused() then
         return json.EMPTY_OBJECT
     end
 
@@ -46,6 +54,36 @@ local function roomContext()
         room_spawn_seed = roomSpawnSeed,
         room_clear = room:IsClear()
     }
+end
+
+local function stablePlayers()
+    if not activeRun or game:IsPaused() then
+        return nil
+    end
+
+    local room = game:GetRoom()
+    if room == nil or room:GetFrameCount() < ROOM_STABLE_FRAMES then
+        return nil
+    end
+
+    local playerCount = game:GetNumPlayers()
+    if playerCount < 1 then
+        return nil
+    end
+
+    local players = {}
+    for playerIndex = 0, playerCount - 1 do
+        local player = game:GetPlayer(playerIndex)
+        if player == nil
+            or not player:Exists()
+            or player.Type ~= EntityType.ENTITY_PLAYER
+            or type(player.ControllerIndex) ~= "number"
+            or player.ControllerIndex < 0 then
+            return nil
+        end
+        table.insert(players, player)
+    end
+    return players
 end
 
 local function emit(eventType, payload)
@@ -115,10 +153,10 @@ local function readPlayer(player, includeInventory)
     return state
 end
 
-local function readPlayers(includeInventory)
+local function readPlayers(includeInventory, playerEntities)
     local players = {}
-    for playerIndex = 0, game:GetNumPlayers() - 1 do
-        table.insert(players, readPlayer(Isaac.GetPlayer(playerIndex), includeInventory))
+    for _, player in ipairs(playerEntities) do
+        table.insert(players, readPlayer(player, includeInventory))
     end
     return players
 end
@@ -194,21 +232,21 @@ local function emitInventoryChanges(player, playerIndex, playerState)
     lastInventoryFingerprints[playerIndex] = inventoryFingerprint(player)
 end
 
-local function emitSnapshot(reason)
-    local players = readPlayers(true)
+local function emitSnapshot(reason, playerEntities)
+    local players = readPlayers(true, playerEntities)
     emit("state_snapshot", { reason = reason, players = players })
     for playerIndex, playerState in ipairs(players) do
         local zeroBasedIndex = playerIndex - 1
-        local player = Isaac.GetPlayer(zeroBasedIndex)
+        local player = playerEntities[playerIndex]
         lastInventories[zeroBasedIndex] = collectibleMap(playerState.inventory)
         lastInventoryFingerprints[zeroBasedIndex] = inventoryFingerprint(player)
         lastPlayerFingerprints[zeroBasedIndex] = playerFingerprint(player)
     end
 end
 
-local function pollPlayers()
-    for playerIndex = 0, game:GetNumPlayers() - 1 do
-        local player = Isaac.GetPlayer(playerIndex)
+local function pollPlayers(playerEntities)
+    for oneBasedIndex, player in ipairs(playerEntities) do
+        local playerIndex = oneBasedIndex - 1
         local fingerprint = playerFingerprint(player)
         if lastPlayerFingerprints[playerIndex] ~= fingerprint then
             local playerState = readPlayer(player, true)
@@ -241,8 +279,13 @@ local function startRun(continued)
     lastInventoryFingerprints = {}
     lastInventories = {}
     deathReported = {}
-    emit("run_started", { continued = continued, players = readPlayers(true) })
-    emitSnapshot("run_started")
+    pendingRoomEntered = false
+    pendingFloorChanged = false
+    pendingRoomCleared = false
+    pendingSnapshotReason = "run_started"
+    pendingCollectibles = {}
+    disabledCallbacks = {}
+    emit("run_started", { continued = continued })
 end
 
 local function endRun(reason, gameOver, shouldSave)
@@ -255,6 +298,46 @@ local function endRun(reason, gameOver, shouldSave)
         should_save = shouldSave
     })
     activeRun = false
+    pendingRoomEntered = false
+    pendingFloorChanged = false
+    pendingRoomCleared = false
+    pendingSnapshotReason = nil
+    pendingCollectibles = {}
+end
+
+local function flushPendingEvents(playerEntities, frame)
+    if pendingFloorChanged then
+        emit("floor_changed", {})
+        pendingFloorChanged = false
+    end
+
+    if pendingRoomEntered then
+        emit("room_entered", {})
+        if game:GetRoom():GetType() == RoomType.ROOM_BOSS then
+            emit("boss_started", {})
+        end
+        pendingRoomEntered = false
+    end
+
+    if pendingRoomCleared then
+        emit("room_cleared", {})
+        if game:GetRoom():GetType() == RoomType.ROOM_BOSS then
+            emit("boss_defeated", {})
+        end
+        pendingRoomCleared = false
+    end
+
+    if pendingSnapshotReason ~= nil then
+        emitSnapshot(pendingSnapshotReason, playerEntities)
+        pendingSnapshotReason = nil
+        lastSnapshotFrame = frame
+        lastPlayerPollFrame = frame
+    end
+
+    for _, payload in ipairs(pendingCollectibles) do
+        emit("collectible_spawned", payload)
+    end
+    pendingCollectibles = {}
 end
 
 local function onPostUpdate()
@@ -263,9 +346,15 @@ local function onPostUpdate()
     end
 
     local frame = game:GetFrameCount()
+    local playerEntities = stablePlayers()
+    if playerEntities == nil then
+        return
+    end
+
+    flushPendingEvents(playerEntities, frame)
     if lastPlayerPollFrame < 0 or frame - lastPlayerPollFrame >= PLAYER_POLL_FRAMES then
         lastPlayerPollFrame = frame
-        pollPlayers()
+        pollPlayers(playerEntities)
     end
     if lastHeartbeatFrame < 0 or frame - lastHeartbeatFrame >= HEARTBEAT_FRAMES then
         lastHeartbeatFrame = frame
@@ -273,7 +362,7 @@ local function onPostUpdate()
     end
     if lastSnapshotFrame < 0 or frame - lastSnapshotFrame >= SNAPSHOT_FRAMES then
         lastSnapshotFrame = frame
-        emitSnapshot("periodic")
+        emitSnapshot("periodic", playerEntities)
     end
 end
 
@@ -281,17 +370,16 @@ local function onNewRoom()
     if not activeRun then
         return
     end
-    emit("room_entered", {})
-    if game:GetRoom():GetType() == RoomType.ROOM_BOSS then
-        emit("boss_started", {})
-    end
-    emitSnapshot("room_entered")
+    pendingRoomEntered = true
+    pendingSnapshotReason = "room_entered"
+    lastPlayerPollFrame = -1
 end
 
 local function onNewLevel()
     if activeRun then
-        emit("floor_changed", {})
-        emitSnapshot("floor_changed")
+        pendingFloorChanged = true
+        pendingSnapshotReason = "floor_changed"
+        lastPlayerPollFrame = -1
     end
 end
 
@@ -299,20 +387,30 @@ local function onRoomCleared()
     if not activeRun then
         return
     end
-    emit("room_cleared", {})
-    if game:GetRoom():GetType() == RoomType.ROOM_BOSS then
-        emit("boss_defeated", {})
-    end
+    pendingRoomCleared = true
 end
 
 local function onPickupInit(_, pickup)
     if activeRun and pickup.Variant == PickupVariant.PICKUP_COLLECTIBLE then
-        emit("collectible_spawned", {
+        table.insert(pendingCollectibles, {
             collectible_id = pickup.SubType,
             init_seed = pickup.InitSeed,
             price = pickup.Price,
             shop_item_id = pickup.ShopItemId
         })
+    end
+end
+
+local function guarded(callbackName, callback)
+    return function(...)
+        if disabledCallbacks[callbackName] then
+            return
+        end
+        local ok, err = pcall(callback, ...)
+        if not ok then
+            disabledCallbacks[callbackName] = true
+            Isaac.DebugString(ERROR_PREFIX .. callbackName .. ": " .. tostring(err))
+        end
     end
 end
 
@@ -322,17 +420,17 @@ emit("bridge_ready", {
     game_version_probe = "Repentance+ J460"
 })
 
-Oriens:AddCallback(ModCallbacks.MC_POST_GAME_STARTED, function(_, continued)
+Oriens:AddCallback(ModCallbacks.MC_POST_GAME_STARTED, guarded("game_started", function(_, continued)
     startRun(continued)
-end)
-Oriens:AddCallback(ModCallbacks.MC_POST_UPDATE, onPostUpdate)
-Oriens:AddCallback(ModCallbacks.MC_POST_NEW_ROOM, onNewRoom)
-Oriens:AddCallback(ModCallbacks.MC_POST_NEW_LEVEL, onNewLevel)
-Oriens:AddCallback(ModCallbacks.MC_PRE_SPAWN_CLEAN_AWARD, onRoomCleared)
-Oriens:AddCallback(ModCallbacks.MC_POST_PICKUP_INIT, onPickupInit)
-Oriens:AddCallback(ModCallbacks.MC_POST_GAME_END, function(_, gameOver)
+end))
+Oriens:AddCallback(ModCallbacks.MC_POST_UPDATE, guarded("post_update", onPostUpdate))
+Oriens:AddCallback(ModCallbacks.MC_POST_NEW_ROOM, guarded("new_room", onNewRoom))
+Oriens:AddCallback(ModCallbacks.MC_POST_NEW_LEVEL, guarded("new_level", onNewLevel))
+Oriens:AddCallback(ModCallbacks.MC_PRE_SPAWN_CLEAN_AWARD, guarded("room_cleared", onRoomCleared))
+Oriens:AddCallback(ModCallbacks.MC_POST_PICKUP_INIT, guarded("pickup_init", onPickupInit))
+Oriens:AddCallback(ModCallbacks.MC_POST_GAME_END, guarded("game_end", function(_, gameOver)
     endRun("game_end", gameOver, nil)
-end)
-Oriens:AddCallback(ModCallbacks.MC_PRE_GAME_EXIT, function(_, shouldSave)
+end))
+Oriens:AddCallback(ModCallbacks.MC_PRE_GAME_EXIT, guarded("game_exit", function(_, shouldSave)
     endRun("game_exit", nil, shouldSave)
-end)
+end))

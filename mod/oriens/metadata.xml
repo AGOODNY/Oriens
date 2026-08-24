@@ -1,9 +1,8 @@
 <metadata>
-    <name>Oriens Phase 0 Probe</name>
+    <name>Oriens Bridge</name>
     <directory>oriens</directory>
-    <id>oriens_phase0_probe</id>
-    <description>只向日志输出 Oriens 结构化状态事件，不改变画面、输入或游戏逻辑。</description>
-    <version>0.1.0</version>
+    <id>oriens_bridge</id>
+    <description>Oriens 的只读游戏状态桥接 Mod；仅输出结构化日志，不改变游戏逻辑。</description>
+    <version>0.2.0</version>
     <visibility>Private</visibility>
 </metadata>
-
